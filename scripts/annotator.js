@@ -132,15 +132,14 @@
   expandedView.id = '__agent_expanded_view__';
   expandedView.style.cssText = 'display:none;align-items:center;gap:12px;white-space:nowrap;font-size:13px;';
   expandedView.innerHTML = `
-    <div style="display:flex;align-items:center;gap:8px;cursor:move;">
-      <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#10b981;box-shadow:0 0 8px #10b981;animation:agentPulse 2s infinite;"></span>
-      <span style="font-weight:600;letter-spacing:-0.2px;">Multi-Box Annotator</span>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <button id="__agent_fold_btn__" class="agent-btn" title="Fold into button (Alt+A)" style="background:#10b981;box-shadow:0 0 8px rgba(16,185,129,0.7);color:#0f172a;width:18px;height:18px;padding:0;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:11px;font-weight:900;border:none;transition:all 0.15s ease;line-height:1;">&#x25BE;</button>
+      <span style="font-weight:600;letter-spacing:-0.2px;cursor:move;">Multi-Box Annotator</span>
     </div>
     <span style="color:#64748b;height:12px;border-left:1px solid #334155;"></span>
     <span id="__agent_status__" style="color:#94a3b8;font-size:12px;cursor:move;">Drag to draw Box #1</span>
     <button id="__agent_pause_btn__" class="agent-btn" style="background:#f59e0b;color:#1e293b;padding:4px 10px;font-weight:600;">&#x23F8; Pause</button>
     <button id="__agent_clear_btn__" class="agent-btn" style="background:#334155;color:#e2e8f0;padding:4px 10px;">Clear All</button>
-    <button id="__agent_fold_btn__" class="agent-btn" title="Fold into button (Alt+A)" style="background:#334155;color:#f8fafc;padding:4px 10px;font-weight:600;display:flex;align-items:center;gap:4px;">&#x25BE; Fold</button>
     <button id="__agent_close_btn__" class="agent-btn" title="Dismiss annotator — press Alt+A to reopen" style="background:#dc2626;color:#fff;padding:4px 10px;">&#x2715; Close</button>
   `;
   toolbar.appendChild(expandedView);
