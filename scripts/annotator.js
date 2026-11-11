@@ -1,7 +1,7 @@
 /**
  * Browser Interactive Multi-Box Annotator & DOM Element Inspector
  * 
- * Injected into active web pages via Playwright (`browser_evaluate`).
+ * Injected into active web pages via Playwright (`browser_evaluate` or `--init-script`).
  * Provides an interactive UI for users to drag selection boxes over web elements,
  * attach instructions/comments to each box, and cleanly extract DOM metadata for the agent.
  */
@@ -11,15 +11,71 @@
     try { window.__agent_annotator_cleanup__(); } catch (_) {}
   }
 
-  // 2. Root Container — STATIC on purpose: it must NOT create a stacking context,
-  // so child layers' z-indexes participate at document level and can interleave
-  // with the document-anchored boxes layer (overlay < boxes < ghost < popup < toolbar).
-  const root = document.createElement('div');
-  root.id = '__agent_inspector_container__';
-  root.style.cssText = 'pointer-events:none;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;user-select:none;';
+  let initialized = false;
+  let domLoadedHandler = null;
+  let bodyObserver = null;
 
-  // Inject CSS Styles
-  const styleEl = document.createElement('style');
+  let teardown = () => {
+    if (domLoadedHandler) {
+      document.removeEventListener('DOMContentLoaded', domLoadedHandler);
+      window.removeEventListener('load', domLoadedHandler);
+      domLoadedHandler = null;
+    }
+    if (bodyObserver) {
+      bodyObserver.disconnect();
+      bodyObserver = null;
+    }
+    if (window.__agent_annotator_cleanup__ === teardown) delete window.__agent_annotator_cleanup__;
+    if (window.__playwright_companion__?.modules?.annotator) {
+      delete window.__playwright_companion__.modules.annotator;
+    }
+  };
+  window.__agent_annotator_cleanup__ = teardown;
+
+  // Pre-register namespace for immediate discovery across all lifecycle stages
+  window.__playwright_companion__ = window.__playwright_companion__ || {
+    version: '1.0.0',
+    modules: {}
+  };
+
+  // Provide early impression placeholder if queried before DOMContentLoaded
+  if (!window.__playwright_companion__.modules.annotator) {
+    window.__playwright_companion__.modules.annotator = {
+      version: '1.4.1',
+      get ready() {
+        if (!initialized && document.body) {
+          init();
+        }
+        return initialized;
+      }
+    };
+  }
+
+  function init() {
+    if (initialized) return;
+    if (document.getElementById('__agent_inspector_container__')) return;
+    if (!document.body) return;
+
+    initialized = true;
+    if (domLoadedHandler) {
+      document.removeEventListener('DOMContentLoaded', domLoadedHandler);
+      window.removeEventListener('load', domLoadedHandler);
+      domLoadedHandler = null;
+    }
+    if (bodyObserver) {
+      bodyObserver.disconnect();
+      bodyObserver = null;
+    }
+
+    // 2. Root Container — STATIC on purpose: it must NOT create a stacking context,
+    // so child layers' z-indexes participate at document level and can interleave
+    // with the document-anchored boxes layer (overlay < boxes < ghost < popup < toolbar).
+    const root = document.createElement('div');
+    root.id = '__agent_inspector_container__';
+    root.style.cssText = 'pointer-events:none;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;user-select:none;';
+
+    // Inject CSS Styles
+    const styleEl = document.createElement('style');
   styleEl.textContent = `
     @keyframes agentPulse { 0%,100% { transform: scale(1); opacity:1; } 50% { transform: scale(1.2); opacity:0.8; } }
     .agent-btn { cursor:pointer; font-size:12px; font-weight:500; border-radius:6px; border:none; transition:all 0.15s ease; font-family:inherit; }
@@ -145,7 +201,7 @@
     toast.id = '__agent_hint_toast__';
     toast.style.cssText = 'position:fixed;right:20px;bottom:20px;background:#0f172a;color:#f8fafc;padding:10px 16px;border-radius:9999px;font-size:13px;box-shadow:0 10px 25px -5px rgba(0,0,0,0.5),0 0 0 1px rgba(255,255,255,0.12);z-index:2147483649;pointer-events:none;transition:opacity 0.4s;opacity:1;';
     toast.textContent = msg;
-    document.body.appendChild(toast);
+    (document.body || document.documentElement).appendChild(toast);
     setTimeout(() => { toast.style.opacity = '0'; }, 3200);
     setTimeout(() => toast.remove(), 3700);
   }
@@ -167,7 +223,7 @@
   popupLayer.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147483648;';
   root.appendChild(popupLayer);
 
-  document.body.appendChild(root);
+  (document.body || document.documentElement).appendChild(root);
 
   // Persistent Boxes layer — anchored to the DOCUMENT (page coordinates) so boxes
   // scroll with the page content instead of being glued to the viewport.
@@ -436,10 +492,13 @@
       return;
     }
   });
-  mutationObserver.observe(document.body, {
-    subtree: true, childList: true, attributes: true,
-    attributeFilter: ['class', 'style', 'hidden']
-  });
+  const targetToObserve = document.body || document.documentElement;
+  if (targetToObserve) {
+    mutationObserver.observe(targetToObserve, {
+      subtree: true, childList: true, attributes: true,
+      attributeFilter: ['class', 'style', 'hidden']
+    });
+  }
   window.addEventListener('scroll', scheduleReanchor, { capture: true, passive: true });
   window.addEventListener('resize', scheduleReanchor);
 
@@ -681,7 +740,7 @@
 
   // Unified teardown — also exposed globally so re-injection can fully replace
   // a previous instance (DOM + observers + window listeners).
-  function teardown() {
+  teardown = () => {
     anchors.clear();
     resizeObserver.disconnect();
     mutationObserver.disconnect();
@@ -693,7 +752,7 @@
     if (window.__playwright_companion__?.modules?.annotator) {
       delete window.__playwright_companion__.modules.annotator;
     }
-  }
+  };
   window.__agent_annotator_cleanup__ = teardown;
 
   // Register with Playwright Companion namespace
@@ -703,7 +762,7 @@
   };
 
   window.__playwright_companion__.modules.annotator = {
-    version: '1.4.0',
+    version: '1.4.1',
     ready: true,
     get paused() { return paused; },
     get folded() { return folded; },
@@ -761,6 +820,33 @@
   // injection can open the bar right away by setting
   // `window.__playwright_companion_autostart__ = 'expanded'` before loading.
   setFoldedState(window.__playwright_companion_autostart__ !== 'expanded');
+  } // end init()
 
-  return "Playwright Companion (Annotator v1.4) ready!";
+  if (!document.body) {
+    domLoadedHandler = () => {
+      if (document.body) init();
+    };
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', domLoadedHandler, { once: true });
+      window.addEventListener('load', domLoadedHandler, { once: true });
+    }
+    if (document.documentElement) {
+      bodyObserver = new MutationObserver(() => {
+        if (document.body) {
+          if (bodyObserver) {
+            bodyObserver.disconnect();
+            bodyObserver = null;
+          }
+          init();
+        }
+      });
+      bodyObserver.observe(document.documentElement, { childList: true });
+    }
+  } else {
+    init();
+  }
+
+  return initialized
+    ? "Playwright Companion (Annotator v1.4.1) ready!"
+    : "Playwright Companion (Annotator v1.4.1) initialized (waiting for DOM)";
 })();

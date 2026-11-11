@@ -44,7 +44,7 @@ window.__playwright_companion__ = {
   version: "1.0.0",
   modules: {
     annotator: {
-      version: "1.4.0",
+      version: "1.4.1",
       ready: true,
       paused: false,
       folded: true,
