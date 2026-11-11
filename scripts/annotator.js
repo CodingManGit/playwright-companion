@@ -309,7 +309,7 @@
   }
 
   function updateStatus() {
-    updateFab();
+    updateBadge();
     const statusEl = document.getElementById('__agent_status__');
     if (!statusEl) return;
     if (paused) {
