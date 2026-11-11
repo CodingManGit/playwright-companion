@@ -41,7 +41,7 @@
   // Provide early impression placeholder if queried before DOMContentLoaded
   if (!window.__playwright_companion__.modules.annotator) {
     window.__playwright_companion__.modules.annotator = {
-      version: '1.4.1',
+      version: '1.5.0',
       get ready() {
         if (!initialized && document.body) {
           init();
@@ -111,68 +111,105 @@
   let folded = true;  // Folded mode: only the floating launcher is visible; bar & drag overlay are hidden
   let hidden = false; // Hidden mode: the whole UI (incl. launcher) is dismissed — annotations are kept
 
-  // 4. Floating Control Toolbar (topmost layer — hidden while folded, draggable by its background)
+  // 4. Unified Floating Control Bar (morphs between a compact circular launcher when folded, and full toolbar when expanded)
   const toolbar = document.createElement('div');
   toolbar.id = '__agent_toolbar__';
-  toolbar.style.cssText = 'position:fixed;right:20px;bottom:84px;display:none;background:#0f172a;color:#f8fafc;padding:8px 18px;border-radius:9999px;box-shadow:0 10px 25px -5px rgba(0,0,0,0.5),0 0 0 1px rgba(255,255,255,0.1);align-items:center;gap:12px;pointer-events:auto;font-size:13px;z-index:2147483649;backdrop-filter:blur(8px);cursor:move;user-select:none;';
-  toolbar.innerHTML = `
-    <div style="display:flex;align-items:center;gap:8px;">
+  toolbar.style.cssText = 'position:fixed;right:20px;bottom:20px;background:linear-gradient(135deg,#0f172a,#1e293b);color:#f8fafc;box-shadow:0 10px 25px -5px rgba(0,0,0,0.5),0 0 0 1px rgba(255,255,255,0.12);pointer-events:auto;z-index:2147483649;backdrop-filter:blur(8px);transition:width 0.22s cubic-bezier(0.16,1,0.3,1),height 0.22s cubic-bezier(0.16,1,0.3,1),border-radius 0.22s cubic-bezier(0.16,1,0.3,1),padding 0.22s cubic-bezier(0.16,1,0.3,1);box-sizing:border-box;user-select:none;display:flex;align-items:center;justify-content:center;';
+
+  // Folded view: circular launcher button with pencil icon and badge
+  const foldedView = document.createElement('div');
+  foldedView.id = '__agent_folded_view__';
+  foldedView.style.cssText = 'display:flex;align-items:center;justify-content:center;width:100%;height:100%;font-size:22px;user-select:none;cursor:pointer;';
+  foldedView.title = 'Open annotator (Alt+A \u00b7 drag to move)';
+  foldedView.innerHTML = `
+    <span id="__agent_fab_icon__">&#x270E;</span>
+    <span id="__agent_fab_badge__" style="position:absolute;top:-4px;right:-4px;min-width:18px;height:18px;padding:0 4px;border-radius:9999px;background:#2563eb;color:#fff;font-size:11px;font-weight:700;display:none;align-items:center;justify-content:center;box-sizing:border-box;"></span>
+  `;
+  toolbar.appendChild(foldedView);
+
+  // Expanded view: full multi-box annotation control toolbar
+  const expandedView = document.createElement('div');
+  expandedView.id = '__agent_expanded_view__';
+  expandedView.style.cssText = 'display:none;align-items:center;gap:12px;white-space:nowrap;font-size:13px;';
+  expandedView.innerHTML = `
+    <div style="display:flex;align-items:center;gap:8px;cursor:move;">
       <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#10b981;box-shadow:0 0 8px #10b981;animation:agentPulse 2s infinite;"></span>
       <span style="font-weight:600;letter-spacing:-0.2px;">Multi-Box Annotator</span>
     </div>
     <span style="color:#64748b;height:12px;border-left:1px solid #334155;"></span>
-    <span id="__agent_status__" style="color:#94a3b8;font-size:12px;">Drag to draw Box #1</span>
+    <span id="__agent_status__" style="color:#94a3b8;font-size:12px;cursor:move;">Drag to draw Box #1</span>
     <button id="__agent_pause_btn__" class="agent-btn" style="background:#f59e0b;color:#1e293b;padding:4px 10px;font-weight:600;">&#x23F8; Pause</button>
     <button id="__agent_clear_btn__" class="agent-btn" style="background:#334155;color:#e2e8f0;padding:4px 10px;">Clear All</button>
-    <button id="__agent_close_btn__" class="agent-btn" title="Close the annotator — press Alt+A to bring it back" style="background:#dc2626;color:#fff;padding:4px 10px;">&#x2715; Close</button>
+    <button id="__agent_fold_btn__" class="agent-btn" title="Fold into button (Alt+A)" style="background:#334155;color:#f8fafc;padding:4px 10px;font-weight:600;display:flex;align-items:center;gap:4px;">&#x25BE; Fold</button>
+    <button id="__agent_close_btn__" class="agent-btn" title="Dismiss annotator — press Alt+A to reopen" style="background:#dc2626;color:#fff;padding:4px 10px;">&#x2715; Close</button>
   `;
+  toolbar.appendChild(expandedView);
   root.appendChild(toolbar);
 
-  // 4b. Floating Action Button — always present, folded by default. Click to
-  // unfold/fold the annotation bar; drag (beyond a small threshold) to reposition.
-  const fab = document.createElement('div');
-  fab.id = '__agent_fab__';
-  fab.style.cssText = 'position:fixed;right:20px;bottom:20px;width:52px;height:52px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);color:#f8fafc;display:flex;align-items:center;justify-content:center;cursor:pointer;pointer-events:auto;z-index:2147483649;box-shadow:0 10px 25px -5px rgba(0,0,0,0.5),0 0 0 1px rgba(255,255,255,0.12);user-select:none;font-size:22px;';
-  fab.title = 'Open annotator (Alt+A \u00b7 drag to move)';
-  fab.innerHTML = `
-    <span id="__agent_fab_icon__">&#x270E;</span>
-    <span id="__agent_fab_badge__" style="position:absolute;top:-4px;right:-4px;min-width:18px;height:18px;padding:0 4px;border-radius:9999px;background:#2563eb;color:#fff;font-size:11px;font-weight:700;display:none;align-items:center;justify-content:center;box-sizing:border-box;"></span>
-  `;
-  root.appendChild(fab);
-
-  function updateFab() {
-    const icon = document.getElementById('__agent_fab_icon__');
+  function updateBadge() {
     const badge = document.getElementById('__agent_fab_badge__');
     const count = window.__agent_annotations__.length;
-    if (icon) icon.innerHTML = folded ? '&#x270E;' : '&#x25BE;'; // pencil → fold chevron
     if (badge) {
       badge.style.display = (folded && count > 0) ? 'flex' : 'none';
       badge.textContent = count > 99 ? '99+' : String(count);
     }
-    fab.title = folded ? 'Open annotator (Alt+A \u00b7 drag to move)' : 'Fold annotator bar (Alt+A \u00b7 drag to move)';
+    toolbar.title = folded ? 'Open annotator (Alt+A \u00b7 drag to move)' : 'Annotator toolbar (drag to move)';
   }
 
-  // Fold/unfold the annotation bar. While folded the page is fully interactive
-  // (drag overlay released) but existing annotation boxes remain visible.
+  // Fold/unfold the unified bar.
   function setFoldedState(next) {
     folded = !!next;
-    toolbar.style.display = folded ? 'none' : 'flex';
     overlay.style.pointerEvents = (folded || paused) ? 'none' : 'auto';
     overlay.style.cursor = (folded || paused) ? 'default' : 'crosshair';
-    if (folded) { ghostBox.style.display = 'none'; isDragging = false; popupLayer.innerHTML = ''; }
-    updateFab();
-    updateStatus();
+
+    if (folded) {
+      toolbar.style.width = '48px';
+      toolbar.style.height = '48px';
+      toolbar.style.padding = '0';
+      toolbar.style.borderRadius = '9999px';
+      toolbar.style.cursor = 'pointer';
+      foldedView.style.display = 'flex';
+      expandedView.style.display = 'none';
+
+      ghostBox.style.display = 'none';
+      isDragging = false;
+      popupLayer.innerHTML = '';
+      updateBadge();
+    } else {
+      toolbar.style.width = 'auto';
+      toolbar.style.height = 'auto';
+      toolbar.style.minHeight = '42px';
+      toolbar.style.padding = '7px 16px';
+      toolbar.style.borderRadius = '9999px';
+      toolbar.style.cursor = 'move';
+      foldedView.style.display = 'none';
+      expandedView.style.display = 'flex';
+
+      // Keep toolbar safely within viewport bounds if dragged
+      if (toolbar.style.left && toolbar.style.left !== 'auto') {
+        requestAnimationFrame(() => {
+          const w = toolbar.offsetWidth || 560;
+          const h = toolbar.offsetHeight || 44;
+          const maxLeft = Math.max(8, window.innerWidth - w - 8);
+          const maxTop = Math.max(8, window.innerHeight - h - 8);
+          const curLeft = parseFloat(toolbar.style.left);
+          const curTop = parseFloat(toolbar.style.top);
+          if (curLeft > maxLeft) toolbar.style.left = maxLeft + 'px';
+          if (curTop > maxTop) toolbar.style.top = maxTop + 'px';
+        });
+      }
+      updateStatus();
+    }
   }
 
-  // Hidden mode: dismiss the ENTIRE UI (launcher, bar, overlay, boxes) without
-  // tearing anything down. The Alt+A hotkey (or the agent API) summons it back
-  // with the same fold state and all annotations intact.
+  // Hidden mode: dismiss the ENTIRE UI (bar, overlay, boxes) without
+  // tearing anything down. The Alt+A hotkey summons it back.
   function setHiddenState(next) {
     hidden = !!next;
     root.style.display = hidden ? 'none' : '';
     boxesLayer.style.display = hidden ? 'none' : '';
     if (hidden) { popupLayer.innerHTML = ''; ghostBox.style.display = 'none'; isDragging = false; }
-    updateFab();
+    updateBadge();
     updateStatus();
   }
 
@@ -182,14 +219,13 @@
     setFoldedState(false);
   }
 
-  // Hotkey semantics: hidden -> bring back the FOLDED launcher (click it to open
-  // the bar); visible (folded or expanded) -> dismiss the whole UI.
+  // Hotkey semantics: toggle between folded and expanded, or unhide if hidden.
   function toggleLauncher() {
     if (hidden) {
       setHiddenState(false);
-      setFoldedState(true);
+      setFoldedState(false);
     } else {
-      setHiddenState(true);
+      setFoldedState(!folded);
     }
   }
 
@@ -648,8 +684,8 @@
   });
 
   // Toolbar button handlers
-  // ---- Draggable toolbar (drag by background; buttons/inputs stay clickable) ----
-  let barDrag = null;
+  // ---- Draggable unified control widget (drag to reposition; clicks on folded circle expand immediately) ----
+  let barDrag = null, barMoved = false;
   toolbar.addEventListener('mousedown', (e) => {
     if (e.target.closest('button, input')) return; // buttons remain clickable
     e.preventDefault();
@@ -660,45 +696,27 @@
     toolbar.style.bottom = 'auto';
     toolbar.style.left = r.left + 'px';
     toolbar.style.top = r.top + 'px';
-    barDrag = { dx: e.clientX - r.left, dy: e.clientY - r.top };
+    barDrag = { dx: e.clientX - r.left, dy: e.clientY - r.top, startX: e.clientX, startY: e.clientY };
+    barMoved = false;
   });
   window.addEventListener('mousemove', (e) => {
     if (!barDrag) return;
+    if (Math.abs(e.clientX - barDrag.startX) > 4 || Math.abs(e.clientY - barDrag.startY) > 4) {
+      barMoved = true;
+    }
     const w = toolbar.offsetWidth, h = toolbar.offsetHeight;
-    const x = Math.max(4, Math.min(window.innerWidth - w - 4, e.clientX - barDrag.dx));
-    const y = Math.max(4, Math.min(window.innerHeight - h - 4, e.clientY - barDrag.dy));
+    const x = Math.max(8, Math.min(window.innerWidth - w - 8, e.clientX - barDrag.dx));
+    const y = Math.max(8, Math.min(window.innerHeight - h - 8, e.clientY - barDrag.dy));
     toolbar.style.left = x + 'px';
     toolbar.style.top = y + 'px';
   });
-  window.addEventListener('mouseup', () => { barDrag = null; });
-
-  // ---- Floating launcher: click to fold/unfold; drag (beyond threshold) to reposition ----
-  let fabDrag = null, fabMoved = false;
-  fab.addEventListener('mousedown', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const r = fab.getBoundingClientRect();
-    // Switch from right/bottom anchoring to absolute positioning at the grabbed point.
-    fab.style.right = 'auto';
-    fab.style.bottom = 'auto';
-    fab.style.left = r.left + 'px';
-    fab.style.top = r.top + 'px';
-    fabDrag = { dx: e.clientX - r.left, dy: e.clientY - r.top, startX: e.clientX, startY: e.clientY };
-    fabMoved = false;
-  });
-  window.addEventListener('mousemove', (e) => {
-    if (!fabDrag) return;
-    if (Math.abs(e.clientX - fabDrag.startX) > 5 || Math.abs(e.clientY - fabDrag.startY) > 5) fabMoved = true;
-    const x = Math.max(4, Math.min(window.innerWidth - fab.offsetWidth - 4, e.clientX - fabDrag.dx));
-    const y = Math.max(4, Math.min(window.innerHeight - fab.offsetHeight - 4, e.clientY - fabDrag.dy));
-    fab.style.left = x + 'px';
-    fab.style.top = y + 'px';
-  });
   window.addEventListener('mouseup', () => {
-    if (!fabDrag) return;
-    const wasClick = !fabMoved;
-    fabDrag = null;
-    if (wasClick) setFoldedState(!folded);
+    if (!barDrag) return;
+    const wasClick = !barMoved;
+    barDrag = null;
+    if (wasClick && folded) {
+      setFoldedState(false);
+    }
   });
 
   // ---- Global hotkey: Alt+A summons/dismisses the annotator from anywhere ----
@@ -762,7 +780,7 @@
   };
 
   window.__playwright_companion__.modules.annotator = {
-    version: '1.4.1',
+    version: '1.5.0',
     ready: true,
     get paused() { return paused; },
     get folded() { return folded; },
@@ -808,6 +826,11 @@
     }
   };
 
+  document.getElementById('__agent_fold_btn__').addEventListener('click', (e) => {
+    e.stopPropagation();
+    setFoldedState(true);
+  });
+
   document.getElementById('__agent_close_btn__').addEventListener('click', (e) => {
     e.stopPropagation();
     // Close is non-destructive: it hides the whole UI but keeps every annotation
@@ -847,6 +870,6 @@
   }
 
   return initialized
-    ? "Playwright Companion (Annotator v1.4.1) ready!"
-    : "Playwright Companion (Annotator v1.4.1) initialized (waiting for DOM)";
+    ? "Playwright Companion (Annotator v1.5.0) ready!"
+    : "Playwright Companion (Annotator v1.5.0) initialized (waiting for DOM)";
 })();

@@ -10,8 +10,8 @@ A dedicated operational companion and browser utility suite for **Playwright**, 
 ## Highlights
 
 - **⚡ Zero-Token Impression Protocol (`window.__playwright_companion__`)**: Preload utilities via `--init-script`. AI agents detect active tools automatically, completely avoiding bulky multi-thousand-token prompt script injections.
-- **🖱 Always-Present Floating Launcher**: A small draggable ✎ button lives on every page, folded by default — the page stays fully interactive, and humans can open the annotation bar themselves without any agent invocation.
-- **⌨️ Alt+A Summon Hotkey (Non-Destructive Close)**: The `✕ Close` button only hides the UI — every annotation is kept. Press `Alt+A` anywhere to bring back the folded ✎ button (click it to open the bar) — or dismiss the UI again. A hint toast appears after closing so the hotkey is discoverable.
+- **🖱 Always-Present Unified Morphing Launcher**: A compact draggable ✎ circular button lives on every page. Clicking it expands the button directly into the full annotation toolbar right in place; clicking `▾ Fold` collapses the toolbar back into the button with zero visual clutter.
+- **⌨️ Alt+A Summon Hotkey (Non-Destructive Close)**: Press `Alt+A` anywhere to toggle between the folded button and the expanded toolbar, or unhide if dismissed.
 - **🎯 Multi-Box Visual Selection Overlay**: Drag selection boxes directly across any web page to select elements, inspect CSS selectors, and attach instructions.
 - **⏸ Pause / Resume (Page Interaction Mode)**: Temporarily unblock the page to open menus, expand dropdowns, and navigate before resuming annotation.
 - **🔗 Online Element Anchoring**: Captured boxes automatically track DOM elements live across scrolling, CSS reflows, and window resizing via `ResizeObserver` & `MutationObserver`.
@@ -44,7 +44,7 @@ window.__playwright_companion__ = {
   version: "1.0.0",
   modules: {
     annotator: {
-      version: "1.4.1",
+      version: "1.5.0",
       ready: true,
       paused: false,
       folded: true,
