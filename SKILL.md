@@ -25,6 +25,8 @@ Under standard `@playwright/mcp --extension` and containerized developer setups:
 
 - **Detectable Impression Protocol (`window.__playwright_companion__`)**:
   Agents query a standard global namespace to instantly acquire an impression of active companion tools. If loaded via `--init-script`, the agent operates with zero injection latency and zero prompt tokens.
+- **Always-Present Floating Launcher (Folded by Default)**: The annotator mounts as a small draggable ✎ button (bottom-right corner) and stays folded so the page remains fully interactive. Humans click it to unfold the annotation bar and start annotating themselves — no agent invocation required. Agents can fold/unfold programmatically via `setFolded(state)` / `toggleFolded()`.
+- **`Alt+A` Summon Hotkey (Non-Destructive Close)**: The toolbar's `✕ Close` button only **hides** the entire UI — all annotations are preserved. Press `Alt+A` anywhere (even on a blank area of the page) to bring back the floating ✎ launcher **folded** (click it to open the bar); while the UI is visible, `Alt+A` dismisses it again. A hint toast appears after closing so the hotkey stays discoverable. Only the agent API `cleanup()` performs a full teardown.
 - **Multi-Box Drag Selection**: Drag multiple persistent boxes across any page (numbered `#1`, `#2`, etc.).
 - **Pause / Resume (Page Interaction Mode)**: The toolbar's `⏸ Pause` button releases the drag overlay so the underlying page is fully clickable — open menus, dropdowns, expand accordions — then `▶ Resume` to keep annotating. Essential for annotating content that only exists after interaction.
 - **Element-Anchored Boxes (Online Layout Tracking)**: Each box anchors to the DOM elements captured at draw time. Its geometry is a normalized fit of the original box relative to the union bounding rect of the selected elements; a `ResizeObserver` + `MutationObserver` + scroll/resize listeners re-fit the box live when layout changes.
@@ -62,7 +64,7 @@ Before attempting any manual script injection, the agent **MUST** check whether 
 
 #### Decision Logic:
 1. **If `window.__playwright_companion__?.modules?.annotator?.ready === true`**:
-   The tool is already active and listening on the page. **Proceed directly to Step 4.** Do not re-inject.
+   The tool is already active and listening on the page. **Proceed directly to Step 4.** Do not re-inject. (The bar may be folded — ask the user to click the floating ✎ button, or call `setFolded(false)` first.)
 2. **If null / undefined**:
    Proceed to **Step 3** to load the utility.
 
@@ -72,13 +74,15 @@ Before attempting any manual script injection, the agent **MUST** check whether 
 
 If the impression check returns null, inject the script using the most efficient available method:
 
+> **Note**: The annotator mounts **folded** by default (only the floating ✎ button appears). When injecting because the user is about to annotate, set `window.__playwright_companion_autostart__ = 'expanded'` first so the bar opens immediately (as shown below).
+
 #### Method A: CDN Bootstrap (Recommended — 1 Line of Code)
 ```json
 {
   "ServerName": "playwright",
   "ToolName": "browser_evaluate",
   "Arguments": {
-    "function": "() => { const s = document.createElement('script'); s.src = 'https://cdn.jsdelivr.net/gh/CodingManGit/playwright-companion@main/scripts/annotator.js'; document.head.appendChild(s); }"
+    "function": "() => { window.__playwright_companion_autostart__ = 'expanded'; const s = document.createElement('script'); s.src = 'https://cdn.jsdelivr.net/gh/CodingManGit/playwright-companion@main/scripts/annotator.js'; document.head.appendChild(s); }"
   }
 }
 ```
@@ -90,7 +94,7 @@ If working in a Windows-side MCP setup where files are locally accessible:
   "ServerName": "playwright",
   "ToolName": "browser_run_code_unsafe",
   "Arguments": {
-    "code": "async (page) => { await page.addScriptTag({ url: 'https://cdn.jsdelivr.net/gh/CodingManGit/playwright-companion@main/scripts/annotator.js' }); return 'loaded'; }"
+    "code": "async (page) => { await page.evaluate(() => { window.__playwright_companion_autostart__ = 'expanded'; }); await page.addScriptTag({ url: 'https://cdn.jsdelivr.net/gh/CodingManGit/playwright-companion@main/scripts/annotator.js' }); return 'loaded'; }"
   }
 }
 ```
@@ -99,6 +103,8 @@ If working in a Windows-side MCP setup where files are locally accessible:
 
 ### Step 4: Read Back User Annotations
 When the user indicates they have drawn boxes or left notes:
+
+> If the user has not started yet, open the bar for them (or ask them to click the floating ✎ button): `() => window.__playwright_companion__?.modules?.annotator?.setFolded(false)`. While folded, the page stays fully interactive and existing boxes remain visible; `toggleFolded()` flips the state.
 
 ```json
 {
@@ -189,6 +195,8 @@ To remove the UI overlay when finished:
   }
 }
 ```
+
+> **Note**: `cleanup()` is a **full teardown** (agent-initiated). The in-page `✕ Close` button and the `Alt+A` hotkey only hide/show the UI and never destroy annotations — use `hide()` instead of `cleanup()` if the user may still want to come back to their annotations.
 
 ---
 

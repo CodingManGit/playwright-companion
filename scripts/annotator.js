@@ -52,11 +52,13 @@
   };
   let annotationCounter = 0;
   let paused = false; // Pause mode: overlay releases pointer events so the page is interactive
+  let folded = true;  // Folded mode: only the floating launcher is visible; bar & drag overlay are hidden
+  let hidden = false; // Hidden mode: the whole UI (incl. launcher) is dismissed — annotations are kept
 
-  // 4. Floating Control Toolbar (topmost layer — always clickable, draggable by its background)
+  // 4. Floating Control Toolbar (topmost layer — hidden while folded, draggable by its background)
   const toolbar = document.createElement('div');
   toolbar.id = '__agent_toolbar__';
-  toolbar.style.cssText = 'position:fixed;top:16px;left:50%;transform:translateX(-50%);background:#0f172a;color:#f8fafc;padding:8px 18px;border-radius:9999px;box-shadow:0 10px 25px -5px rgba(0,0,0,0.5),0 0 0 1px rgba(255,255,255,0.1);display:flex;align-items:center;gap:12px;pointer-events:auto;font-size:13px;z-index:2147483649;backdrop-filter:blur(8px);cursor:move;user-select:none;';
+  toolbar.style.cssText = 'position:fixed;right:20px;bottom:84px;display:none;background:#0f172a;color:#f8fafc;padding:8px 18px;border-radius:9999px;box-shadow:0 10px 25px -5px rgba(0,0,0,0.5),0 0 0 1px rgba(255,255,255,0.1);align-items:center;gap:12px;pointer-events:auto;font-size:13px;z-index:2147483649;backdrop-filter:blur(8px);cursor:move;user-select:none;';
   toolbar.innerHTML = `
     <div style="display:flex;align-items:center;gap:8px;">
       <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#10b981;box-shadow:0 0 8px #10b981;animation:agentPulse 2s infinite;"></span>
@@ -66,9 +68,87 @@
     <span id="__agent_status__" style="color:#94a3b8;font-size:12px;">Drag to draw Box #1</span>
     <button id="__agent_pause_btn__" class="agent-btn" style="background:#f59e0b;color:#1e293b;padding:4px 10px;font-weight:600;">&#x23F8; Pause</button>
     <button id="__agent_clear_btn__" class="agent-btn" style="background:#334155;color:#e2e8f0;padding:4px 10px;">Clear All</button>
-    <button id="__agent_close_btn__" class="agent-btn" style="background:#dc2626;color:#fff;padding:4px 10px;">Close</button>
+    <button id="__agent_close_btn__" class="agent-btn" title="Close the annotator — press Alt+A to bring it back" style="background:#dc2626;color:#fff;padding:4px 10px;">&#x2715; Close</button>
   `;
   root.appendChild(toolbar);
+
+  // 4b. Floating Action Button — always present, folded by default. Click to
+  // unfold/fold the annotation bar; drag (beyond a small threshold) to reposition.
+  const fab = document.createElement('div');
+  fab.id = '__agent_fab__';
+  fab.style.cssText = 'position:fixed;right:20px;bottom:20px;width:52px;height:52px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);color:#f8fafc;display:flex;align-items:center;justify-content:center;cursor:pointer;pointer-events:auto;z-index:2147483649;box-shadow:0 10px 25px -5px rgba(0,0,0,0.5),0 0 0 1px rgba(255,255,255,0.12);user-select:none;font-size:22px;';
+  fab.title = 'Open annotator (Alt+A \u00b7 drag to move)';
+  fab.innerHTML = `
+    <span id="__agent_fab_icon__">&#x270E;</span>
+    <span id="__agent_fab_badge__" style="position:absolute;top:-4px;right:-4px;min-width:18px;height:18px;padding:0 4px;border-radius:9999px;background:#2563eb;color:#fff;font-size:11px;font-weight:700;display:none;align-items:center;justify-content:center;box-sizing:border-box;"></span>
+  `;
+  root.appendChild(fab);
+
+  function updateFab() {
+    const icon = document.getElementById('__agent_fab_icon__');
+    const badge = document.getElementById('__agent_fab_badge__');
+    const count = window.__agent_annotations__.length;
+    if (icon) icon.innerHTML = folded ? '&#x270E;' : '&#x25BE;'; // pencil → fold chevron
+    if (badge) {
+      badge.style.display = (folded && count > 0) ? 'flex' : 'none';
+      badge.textContent = count > 99 ? '99+' : String(count);
+    }
+    fab.title = folded ? 'Open annotator (Alt+A \u00b7 drag to move)' : 'Fold annotator bar (Alt+A \u00b7 drag to move)';
+  }
+
+  // Fold/unfold the annotation bar. While folded the page is fully interactive
+  // (drag overlay released) but existing annotation boxes remain visible.
+  function setFoldedState(next) {
+    folded = !!next;
+    toolbar.style.display = folded ? 'none' : 'flex';
+    overlay.style.pointerEvents = (folded || paused) ? 'none' : 'auto';
+    overlay.style.cursor = (folded || paused) ? 'default' : 'crosshair';
+    if (folded) { ghostBox.style.display = 'none'; isDragging = false; popupLayer.innerHTML = ''; }
+    updateFab();
+    updateStatus();
+  }
+
+  // Hidden mode: dismiss the ENTIRE UI (launcher, bar, overlay, boxes) without
+  // tearing anything down. The Alt+A hotkey (or the agent API) summons it back
+  // with the same fold state and all annotations intact.
+  function setHiddenState(next) {
+    hidden = !!next;
+    root.style.display = hidden ? 'none' : '';
+    boxesLayer.style.display = hidden ? 'none' : '';
+    if (hidden) { popupLayer.innerHTML = ''; ghostBox.style.display = 'none'; isDragging = false; }
+    updateFab();
+    updateStatus();
+  }
+
+  // Summon = reveal the UI and expand the bar, ready to annotate.
+  function summon() {
+    setHiddenState(false);
+    setFoldedState(false);
+  }
+
+  // Hotkey semantics: hidden -> bring back the FOLDED launcher (click it to open
+  // the bar); visible (folded or expanded) -> dismiss the whole UI.
+  function toggleLauncher() {
+    if (hidden) {
+      setHiddenState(false);
+      setFoldedState(true);
+    } else {
+      setHiddenState(true);
+    }
+  }
+
+  // Brief, non-blocking hint toast (e.g. the hotkey reminder after closing).
+  function showHint(msg) {
+    const old = document.getElementById('__agent_hint_toast__');
+    if (old) old.remove();
+    const toast = document.createElement('div');
+    toast.id = '__agent_hint_toast__';
+    toast.style.cssText = 'position:fixed;right:20px;bottom:20px;background:#0f172a;color:#f8fafc;padding:10px 16px;border-radius:9999px;font-size:13px;box-shadow:0 10px 25px -5px rgba(0,0,0,0.5),0 0 0 1px rgba(255,255,255,0.12);z-index:2147483649;pointer-events:none;transition:opacity 0.4s;opacity:1;';
+    toast.textContent = msg;
+    document.body.appendChild(toast);
+    setTimeout(() => { toast.style.opacity = '0'; }, 3200);
+    setTimeout(() => toast.remove(), 3700);
+  }
 
   // 5. Drag interaction layer
   const overlay = document.createElement('div');
@@ -137,6 +217,7 @@
   }
 
   function updateStatus() {
+    updateFab();
     const statusEl = document.getElementById('__agent_status__');
     if (!statusEl) return;
     if (paused) {
@@ -201,6 +282,7 @@
       window.__agent_annotations__ = window.__agent_annotations__.filter(a => a.id !== anno.id);
       window.__selected_elements__ = window.__agent_annotations__;
       anchors.delete(anno.id);
+      popupLayer.innerHTML = ''; // close any open comment popup for the deleted box
       boxWrapper.remove();
       updateStatus();
     });
@@ -217,7 +299,7 @@
     const vpX = anno.box.x - window.scrollX;
     const vpY = anno.box.y - window.scrollY;
     // Place BELOW the badge row (not over it — a double-click's 2nd click must land on
-    // the badge) and never over the toolbar (top 16px + ~40px tall).
+    // the badge) and keep clear of the viewport edges.
     const posX = Math.max(10, Math.min(window.innerWidth - 300, vpX));
     const posY = Math.max(68, Math.min(window.innerHeight - 60, vpY + 22));
 
@@ -514,8 +596,9 @@
     e.preventDefault();
     e.stopPropagation();
     const r = toolbar.getBoundingClientRect();
-    // Switch from centered transform to absolute positioning at the grabbed point.
-    toolbar.style.transform = 'none';
+    // Switch from right/bottom anchoring to absolute positioning at the grabbed point.
+    toolbar.style.right = 'auto';
+    toolbar.style.bottom = 'auto';
     toolbar.style.left = r.left + 'px';
     toolbar.style.top = r.top + 'px';
     barDrag = { dx: e.clientX - r.left, dy: e.clientY - r.top };
@@ -530,12 +613,53 @@
   });
   window.addEventListener('mouseup', () => { barDrag = null; });
 
+  // ---- Floating launcher: click to fold/unfold; drag (beyond threshold) to reposition ----
+  let fabDrag = null, fabMoved = false;
+  fab.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const r = fab.getBoundingClientRect();
+    // Switch from right/bottom anchoring to absolute positioning at the grabbed point.
+    fab.style.right = 'auto';
+    fab.style.bottom = 'auto';
+    fab.style.left = r.left + 'px';
+    fab.style.top = r.top + 'px';
+    fabDrag = { dx: e.clientX - r.left, dy: e.clientY - r.top, startX: e.clientX, startY: e.clientY };
+    fabMoved = false;
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!fabDrag) return;
+    if (Math.abs(e.clientX - fabDrag.startX) > 5 || Math.abs(e.clientY - fabDrag.startY) > 5) fabMoved = true;
+    const x = Math.max(4, Math.min(window.innerWidth - fab.offsetWidth - 4, e.clientX - fabDrag.dx));
+    const y = Math.max(4, Math.min(window.innerHeight - fab.offsetHeight - 4, e.clientY - fabDrag.dy));
+    fab.style.left = x + 'px';
+    fab.style.top = y + 'px';
+  });
+  window.addEventListener('mouseup', () => {
+    if (!fabDrag) return;
+    const wasClick = !fabMoved;
+    fabDrag = null;
+    if (wasClick) setFoldedState(!folded);
+  });
+
+  // ---- Global hotkey: Alt+A summons/dismisses the annotator from anywhere ----
+  // While hidden it brings back the floating launcher FOLDED (click it to open
+  // the bar); while the UI is visible it dismisses everything. Nothing is destroyed.
+  function onGlobalHotkey(e) {
+    if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && e.code === 'KeyA') {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleLauncher();
+    }
+  }
+  window.addEventListener('keydown', onGlobalHotkey, true);
+
   document.getElementById('__agent_pause_btn__').addEventListener('click', (e) => {
     e.stopPropagation();
     paused = !paused;
     // Release the drag overlay so the underlying page (menus, dropdowns, links) is interactive.
-    overlay.style.pointerEvents = paused ? 'none' : 'auto';
-    overlay.style.cursor = paused ? 'default' : 'crosshair';
+    overlay.style.pointerEvents = (paused || folded) ? 'none' : 'auto';
+    overlay.style.cursor = (paused || folded) ? 'default' : 'crosshair';
     const btn = document.getElementById('__agent_pause_btn__');
     btn.innerHTML = paused ? '&#x25B6; Resume' : '&#x23F8; Pause';
     btn.style.background = paused ? '#10b981' : '#f59e0b';
@@ -561,6 +685,8 @@
     anchors.clear();
     resizeObserver.disconnect();
     mutationObserver.disconnect();
+    window.removeEventListener('keydown', onGlobalHotkey, true);
+    document.getElementById('__agent_hint_toast__')?.remove();
     root.remove();
     boxesLayer.remove(); // boxes layer lives outside root (document-anchored)
     if (window.__agent_annotator_cleanup__ === teardown) delete window.__agent_annotator_cleanup__;
@@ -577,13 +703,32 @@
   };
 
   window.__playwright_companion__.modules.annotator = {
-    version: '1.2.0',
+    version: '1.4.0',
     ready: true,
     get paused() { return paused; },
+    get folded() { return folded; },
+    get hidden() { return hidden; },
     setPaused(state) {
       if (paused !== !!state) {
         document.getElementById('__agent_pause_btn__')?.click();
       }
+    },
+    setFolded(state) {
+      if (hidden) setHiddenState(false);
+      setFoldedState(!!state);
+    },
+    toggleFolded() {
+      if (hidden) { summon(); return; }
+      setFoldedState(!folded);
+    },
+    show() {
+      summon();
+    },
+    hide() {
+      setHiddenState(true);
+    },
+    toggleVisibility() {
+      toggleLauncher();
     },
     clear() {
       document.getElementById('__agent_clear_btn__')?.click();
@@ -606,8 +751,16 @@
 
   document.getElementById('__agent_close_btn__').addEventListener('click', (e) => {
     e.stopPropagation();
-    teardown();
+    // Close is non-destructive: it hides the whole UI but keeps every annotation
+    // and the Alt+A hotkey alive. Full teardown stays available via cleanup().
+    setHiddenState(true);
+    showHint('Annotator closed \u2014 press Alt+A to reopen');
   });
 
-  return "Playwright Companion (Annotator v1.2) ready!";
+  // Mounted folded by default (non-intrusive floating launcher). Explicit agent
+  // injection can open the bar right away by setting
+  // `window.__playwright_companion_autostart__ = 'expanded'` before loading.
+  setFoldedState(window.__playwright_companion_autostart__ !== 'expanded');
+
+  return "Playwright Companion (Annotator v1.4) ready!";
 })();

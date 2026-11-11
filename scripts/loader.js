@@ -6,6 +6,9 @@
  * 
  * Usage in Playwright MCP command:
  *   npx @playwright/mcp@latest ... --init-script ./loader.js
+ *
+ * The companion mounts as a folded floating ✎ button (bottom-right); the page
+ * stays fully interactive until the user clicks it to open the annotation bar.
  */
 (function() {
   if (typeof window === 'undefined') return;
