@@ -138,9 +138,9 @@
     </div>
     <span style="color:#64748b;height:12px;border-left:1px solid #334155;"></span>
     <span id="__agent_status__" style="color:#94a3b8;font-size:12px;cursor:move;">Drag to draw Box #1</span>
-    <button id="__agent_pause_btn__" class="agent-btn" style="background:#f59e0b;color:#1e293b;padding:4px 10px;font-weight:600;">&#x23F8; Pause</button>
-    <button id="__agent_clear_btn__" class="agent-btn" style="background:#334155;color:#e2e8f0;padding:4px 10px;">Clear All</button>
-    <button id="__agent_close_btn__" class="agent-btn" title="Dismiss annotator — press Alt+A to reopen" style="background:#dc2626;color:#fff;padding:4px 10px;">&#x2715; Close</button>
+    <button id="__agent_pause_btn__" class="agent-btn" title="Pause annotating (interact with page)" style="background:#f59e0b;color:#1e293b;width:24px;height:24px;padding:0;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:11px;line-height:1;font-weight:700;">&#x23F8;&#xFE0E;</button>
+    <button id="__agent_clear_btn__" class="agent-btn" title="Clear all annotations" style="background:#334155;color:#e2e8f0;width:24px;height:24px;padding:0;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg></button>
+    <button id="__agent_close_btn__" class="agent-btn" title="Dismiss annotator — press Alt+A to reopen" style="background:#dc2626;color:#fff;width:24px;height:24px;padding:0;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:12px;line-height:1;">&#x2715;</button>
   `;
   toolbar.appendChild(expandedView);
   root.appendChild(toolbar);
@@ -737,7 +737,8 @@
     overlay.style.pointerEvents = (paused || folded) ? 'none' : 'auto';
     overlay.style.cursor = (paused || folded) ? 'default' : 'crosshair';
     const btn = document.getElementById('__agent_pause_btn__');
-    btn.innerHTML = paused ? '&#x25B6; Resume' : '&#x23F8; Pause';
+    btn.innerHTML = paused ? '&#x25B6;&#xFE0E;' : '&#x23F8;&#xFE0E;';
+    btn.title = paused ? 'Resume annotating' : 'Pause annotating (interact with page)';
     btn.style.background = paused ? '#10b981' : '#f59e0b';
     btn.style.color = paused ? '#fff' : '#1e293b';
     if (paused) { ghostBox.style.display = 'none'; isDragging = false; }
