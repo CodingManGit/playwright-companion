@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Crop Box Helper for Browser Interactive Annotator
+Crop Box Helper for Browser Interactive Overlay Annotator
 
 Takes a full-viewport browser screenshot and crops the exact rectangular region
 defined by a user annotation box (accounting for device pixel ratio / HiDPI scaling).

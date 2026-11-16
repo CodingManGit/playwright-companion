@@ -17,11 +17,11 @@
   if (window.__playwright_companion_loader_initialized__) return;
   window.__playwright_companion_loader_initialized__ = true;
 
-  const COMPANION_CDN_URL = 'https://cdn.jsdelivr.net/gh/CodingManGit/playwright-companion@main/scripts/annotator.js';
+  const COMPANION_CDN_URL = 'https://cdn.jsdelivr.net/gh/CodingManGit/playwright-companion@main/scripts/overlay_annotator.js';
 
   function mountCompanion() {
-    // If annotator is already loaded, skip
-    if (window.__playwright_companion__?.modules?.annotator?.ready) return;
+    // If the overlay annotator is already loaded, skip
+    if (window.__playwright_companion__?.modules?.overlay_annotator?.ready) return;
 
     // Strategy 1: Attempt standard script injection from CDN
     const script = document.createElement('script');

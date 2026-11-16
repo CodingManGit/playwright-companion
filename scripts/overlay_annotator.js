@@ -1,42 +1,62 @@
 /**
- * Browser Interactive Multi-Box Annotator & DOM Element Inspector
+ * Browser Interactive Multi-Box Overlay Annotator & DOM Element Inspector
  * 
  * Injected into active web pages via Playwright (`browser_evaluate`).
  * Provides an interactive UI for users to drag selection boxes over web elements,
  * attach instructions/comments to each box, and cleanly extract DOM metadata for the agent.
  */
 (() => {
-  // 0. Tear down any previous instance (DOM + listeners + observers) if present
-  if (typeof window.__agent_annotator_cleanup__ === 'function') {
-    try { window.__agent_annotator_cleanup__(); } catch (_) {}
+  // Trusted Types Policy for strict CSP environments (e.g. Google Flow, Google.com)
+  let ttPolicy = null;
+  if (typeof window !== 'undefined' && window.trustedTypes && typeof window.trustedTypes.createPolicy === 'function') {
+    try {
+      ttPolicy = window.trustedTypes.createPolicy('playwright_companion', {
+        createHTML: s => s
+      });
+    } catch (_) {
+      try {
+        ttPolicy = window.trustedTypes.defaultPolicy || null;
+      } catch (_) {}
+    }
+  }
+  const setHTML = (el, html) => {
+    if (ttPolicy) {
+      el.innerHTML = ttPolicy.createHTML(html);
+    } else {
+      el.innerHTML = html;
+    }
+  };
+
+  function mount() {  // 0. Tear down any previous instance (DOM + listeners + observers) if present
+  if (typeof window.__overlay_cleanup__ === 'function') {
+    try { window.__overlay_cleanup__(); } catch (_) {}
   }
 
   // 2. Root Container — STATIC on purpose: it must NOT create a stacking context,
   // so child layers' z-indexes participate at document level and can interleave
   // with the document-anchored boxes layer (overlay < boxes < ghost < popup < toolbar).
   const root = document.createElement('div');
-  root.id = '__agent_inspector_container__';
+  root.id = '__overlay_container__';
   root.style.cssText = 'pointer-events:none;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;user-select:none;';
 
   // Inject CSS Styles
   const styleEl = document.createElement('style');
   styleEl.textContent = `
-    @keyframes agentPulse { 0%,100% { transform: scale(1); opacity:1; } 50% { transform: scale(1.2); opacity:0.8; } }
-    .agent-btn { cursor:pointer; font-size:12px; font-weight:500; border-radius:6px; border:none; transition:all 0.15s ease; font-family:inherit; }
-    .agent-btn:hover { filter: brightness(1.15); transform: translateY(-1px); }
-    .agent-btn:active { transform: translateY(0); }
+    @keyframes overlayPulse { 0%,100% { transform: scale(1); opacity:1; } 50% { transform: scale(1.2); opacity:0.8; } }
+    .overlay-btn { cursor:pointer; font-size:12px; font-weight:500; border-radius:6px; border:none; transition:all 0.15s ease; font-family:inherit; }
+    .overlay-btn:hover { filter: brightness(1.15); transform: translateY(-1px); }
+    .overlay-btn:active { transform: translateY(0); }
   `;
   root.appendChild(styleEl);
 
   // 3. Global Store
   // NOTE: `box` and `elements[].rect` are stored in PAGE (document) coordinates so
-  // annotations survive scrolling. Use `window.__agent_annotations_viewport__()` to
+  // annotations survive scrolling. Use `window.__overlay_annotations_viewport__()` to
   // get viewport-relative coordinates (e.g. for cropping a viewport screenshot).
-  window.__agent_annotations__ = [];
-  window.__selected_elements__ = window.__agent_annotations__;
-  window.__agent_annotations_viewport__ = () => {
+  window.__overlay_annotations__ = [];
+  window.__overlay_annotations_viewport__ = () => {
     const sx = window.scrollX, sy = window.scrollY;
-    return window.__agent_annotations__.map(a => ({
+    return window.__overlay_annotations__.map(a => ({
       ...a,
       box: { x: a.box.x - sx, y: a.box.y - sy, width: a.box.width, height: a.box.height },
       elements: a.elements.map(el => ({
@@ -57,43 +77,43 @@
 
   // 4. Floating Control Toolbar (topmost layer — hidden while folded, draggable by its background)
   const toolbar = document.createElement('div');
-  toolbar.id = '__agent_toolbar__';
+  toolbar.id = '__overlay_toolbar__';
   toolbar.style.cssText = 'position:fixed;right:20px;bottom:84px;display:none;background:#0f172a;color:#f8fafc;padding:8px 18px;border-radius:9999px;box-shadow:0 10px 25px -5px rgba(0,0,0,0.5),0 0 0 1px rgba(255,255,255,0.1);align-items:center;gap:12px;pointer-events:auto;font-size:13px;z-index:2147483649;backdrop-filter:blur(8px);cursor:move;user-select:none;';
-  toolbar.innerHTML = `
+  setHTML(toolbar, `
     <div style="display:flex;align-items:center;gap:8px;">
-      <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#10b981;box-shadow:0 0 8px #10b981;animation:agentPulse 2s infinite;"></span>
-      <span style="font-weight:600;letter-spacing:-0.2px;">Multi-Box Annotator</span>
+      <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#10b981;box-shadow:0 0 8px #10b981;animation:overlayPulse 2s infinite;"></span>
+      <span style="font-weight:600;letter-spacing:-0.2px;">Multi-Box Overlay Annotator</span>
     </div>
     <span style="color:#64748b;height:12px;border-left:1px solid #334155;"></span>
-    <span id="__agent_status__" style="color:#94a3b8;font-size:12px;">Drag to draw Box #1</span>
-    <button id="__agent_pause_btn__" class="agent-btn" style="background:#f59e0b;color:#1e293b;padding:4px 10px;font-weight:600;">&#x23F8; Pause</button>
-    <button id="__agent_clear_btn__" class="agent-btn" style="background:#334155;color:#e2e8f0;padding:4px 10px;">Clear All</button>
-    <button id="__agent_close_btn__" class="agent-btn" title="Close the annotator — press Alt+A to bring it back" style="background:#dc2626;color:#fff;padding:4px 10px;">&#x2715; Close</button>
-  `;
+    <span id="__overlay_status__" style="color:#94a3b8;font-size:12px;">Drag to draw Box #1</span>
+    <button id="__overlay_pause_btn__" class="overlay-btn" style="background:#f59e0b;color:#1e293b;padding:4px 10px;font-weight:600;">&#x23F8; Pause</button>
+    <button id="__overlay_clear_btn__" class="overlay-btn" style="background:#334155;color:#e2e8f0;padding:4px 10px;">Clear All</button>
+    <button id="__overlay_close_btn__" class="overlay-btn" title="Close the overlay — press Alt+A to bring it back" style="background:#dc2626;color:#fff;padding:4px 10px;">&#x2715; Close</button>
+  `);
   root.appendChild(toolbar);
 
   // 4b. Floating Action Button — always present, folded by default. Click to
   // unfold/fold the annotation bar; drag (beyond a small threshold) to reposition.
   const fab = document.createElement('div');
-  fab.id = '__agent_fab__';
+  fab.id = '__overlay_fab__';
   fab.style.cssText = 'position:fixed;right:20px;bottom:20px;width:52px;height:52px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);color:#f8fafc;display:flex;align-items:center;justify-content:center;cursor:pointer;pointer-events:auto;z-index:2147483649;box-shadow:0 10px 25px -5px rgba(0,0,0,0.5),0 0 0 1px rgba(255,255,255,0.12);user-select:none;font-size:22px;';
-  fab.title = 'Open annotator (Alt+A \u00b7 drag to move)';
-  fab.innerHTML = `
-    <span id="__agent_fab_icon__">&#x270E;</span>
-    <span id="__agent_fab_badge__" style="position:absolute;top:-4px;right:-4px;min-width:18px;height:18px;padding:0 4px;border-radius:9999px;background:#2563eb;color:#fff;font-size:11px;font-weight:700;display:none;align-items:center;justify-content:center;box-sizing:border-box;"></span>
-  `;
+  fab.title = 'Open overlay (Alt+A \u00b7 drag to move)';
+  setHTML(fab, `
+    <span id="__overlay_fab_icon__">&#x270E;</span>
+    <span id="__overlay_fab_badge__" style="position:absolute;top:-4px;right:-4px;min-width:18px;height:18px;padding:0 4px;border-radius:9999px;background:#2563eb;color:#fff;font-size:11px;font-weight:700;display:none;align-items:center;justify-content:center;box-sizing:border-box;"></span>
+  `);
   root.appendChild(fab);
 
   function updateFab() {
-    const icon = document.getElementById('__agent_fab_icon__');
-    const badge = document.getElementById('__agent_fab_badge__');
-    const count = window.__agent_annotations__.length;
-    if (icon) icon.innerHTML = folded ? '&#x270E;' : '&#x25BE;'; // pencil → fold chevron
+    const icon = document.getElementById('__overlay_fab_icon__');
+    const badge = document.getElementById('__overlay_fab_badge__');
+    const count = window.__overlay_annotations__.length;
+    if (icon) icon.textContent = folded ? '✎' : '▾'; // pencil → fold chevron
     if (badge) {
       badge.style.display = (folded && count > 0) ? 'flex' : 'none';
       badge.textContent = count > 99 ? '99+' : String(count);
     }
-    fab.title = folded ? 'Open annotator (Alt+A \u00b7 drag to move)' : 'Fold annotator bar (Alt+A \u00b7 drag to move)';
+    fab.title = folded ? 'Open overlay (Alt+A \u00b7 drag to move)' : 'Fold overlay bar (Alt+A \u00b7 drag to move)';
   }
 
   // Fold/unfold the annotation bar. While folded the page is fully interactive
@@ -103,7 +123,7 @@
     toolbar.style.display = folded ? 'none' : 'flex';
     overlay.style.pointerEvents = (folded || paused) ? 'none' : 'auto';
     overlay.style.cursor = (folded || paused) ? 'default' : 'crosshair';
-    if (folded) { ghostBox.style.display = 'none'; isDragging = false; popupLayer.innerHTML = ''; }
+    if (folded) { ghostBox.style.display = 'none'; isDragging = false; popupLayer.textContent = ''; }
     updateFab();
     updateStatus();
   }
@@ -115,7 +135,7 @@
     hidden = !!next;
     root.style.display = hidden ? 'none' : '';
     boxesLayer.style.display = hidden ? 'none' : '';
-    if (hidden) { popupLayer.innerHTML = ''; ghostBox.style.display = 'none'; isDragging = false; }
+    if (hidden) { popupLayer.textContent = ''; ghostBox.style.display = 'none'; isDragging = false; }
     updateFab();
     updateStatus();
   }
@@ -139,20 +159,20 @@
 
   // Brief, non-blocking hint toast (e.g. the hotkey reminder after closing).
   function showHint(msg) {
-    const old = document.getElementById('__agent_hint_toast__');
+    const old = document.getElementById('__overlay_hint_toast__');
     if (old) old.remove();
     const toast = document.createElement('div');
-    toast.id = '__agent_hint_toast__';
+    toast.id = '__overlay_hint_toast__';
     toast.style.cssText = 'position:fixed;right:20px;bottom:20px;background:#0f172a;color:#f8fafc;padding:10px 16px;border-radius:9999px;font-size:13px;box-shadow:0 10px 25px -5px rgba(0,0,0,0.5),0 0 0 1px rgba(255,255,255,0.12);z-index:2147483649;pointer-events:none;transition:opacity 0.4s;opacity:1;';
     toast.textContent = msg;
-    document.body.appendChild(toast);
+    (document.body || document.documentElement).appendChild(toast);
     setTimeout(() => { toast.style.opacity = '0'; }, 3200);
     setTimeout(() => toast.remove(), 3700);
   }
 
   // 5. Drag interaction layer
   const overlay = document.createElement('div');
-  overlay.id = '__agent_drag_overlay__';
+  overlay.id = '__overlay_drag_layer__';
   overlay.style.cssText = 'position:fixed;inset:0;cursor:crosshair;pointer-events:auto;z-index:2147483645;';
   root.appendChild(overlay);
 
@@ -163,16 +183,16 @@
 
   // Popup layer for adding/editing notes (above boxes, below toolbar)
   const popupLayer = document.createElement('div');
-  popupLayer.id = '__agent_popup_layer__';
+  popupLayer.id = '__overlay_popup_layer__';
   popupLayer.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147483648;';
   root.appendChild(popupLayer);
 
-  document.body.appendChild(root);
+  (document.body || document.documentElement).appendChild(root);
 
   // Persistent Boxes layer — anchored to the DOCUMENT (page coordinates) so boxes
   // scroll with the page content instead of being glued to the viewport.
   const boxesLayer = document.createElement('div');
-  boxesLayer.id = '__agent_boxes_layer__';
+  boxesLayer.id = '__overlay_boxes_layer__';
   boxesLayer.style.cssText = 'position:absolute;top:0;left:0;width:0;height:0;pointer-events:none;z-index:2147483646;';
   (document.body || document.documentElement).appendChild(boxesLayer);
 
@@ -218,23 +238,23 @@
 
   function updateStatus() {
     updateFab();
-    const statusEl = document.getElementById('__agent_status__');
+    const statusEl = document.getElementById('__overlay_status__');
     if (!statusEl) return;
     if (paused) {
-      statusEl.innerHTML = `<span style="color:#f59e0b;font-weight:600;">Paused</span> <span style="color:#64748b;">— page is interactive, Resume to draw again</span>`;
+      setHTML(statusEl, `<span style="color:#f59e0b;font-weight:600;">Paused</span> <span style="color:#64748b;">— page is interactive, Resume to draw again</span>`);
       return;
     }
-    const count = window.__agent_annotations__.length;
+    const count = window.__overlay_annotations__.length;
     if (count === 0) {
-      statusEl.innerHTML = `Drag to draw Box #1`;
+      statusEl.textContent = `Drag to draw Box #1`;
     } else {
-      statusEl.innerHTML = `<span style="color:#10b981;font-weight:600;">${count} box${count > 1 ? 'es' : ''} active</span> <span style="color:#64748b;">(drag to add #${count + 1})</span>`;
+      setHTML(statusEl, `<span style="color:#10b981;font-weight:600;">${count} box${count > 1 ? 'es' : ''} active</span> <span style="color:#64748b;">(drag to add #${count + 1})</span>`);
     }
   }
 
   function renderAnnotationBox(anno) {
     const boxWrapper = document.createElement('div');
-    boxWrapper.id = `__anno_${anno.id}__`;
+    boxWrapper.id = `__overlay_box_${anno.id}__`;
     // anno.box is in page (document) coordinates; offset by the layer origin so the
     // absolute box stays glued to the page content across scrolling.
     boxWrapper.style.cssText = `position:absolute;left:${anno.box.x - layerOriginX}px;top:${anno.box.y - layerOriginY}px;width:${anno.box.width}px;height:${anno.box.height}px;border:2px solid #3b82f6;background:rgba(59,130,246,0.08);border-radius:4px;box-sizing:border-box;pointer-events:none;`;
@@ -275,14 +295,13 @@
     // Delete Button
     const delBtn = document.createElement('button');
     delBtn.style.cssText = `background:#475569;color:#fff;border:none;border-radius:4px;width:18px;height:18px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:11px;line-height:1;padding:0;`;
-    delBtn.innerHTML = '×';
+    delBtn.textContent = '×';
     delBtn.title = 'Remove this annotation';
     delBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      window.__agent_annotations__ = window.__agent_annotations__.filter(a => a.id !== anno.id);
-      window.__selected_elements__ = window.__agent_annotations__;
+      window.__overlay_annotations__ = window.__overlay_annotations__.filter(a => a.id !== anno.id);
       anchors.delete(anno.id);
-      popupLayer.innerHTML = ''; // close any open comment popup for the deleted box
+      popupLayer.textContent = ''; // close any open comment popup for the deleted box
       boxWrapper.remove();
       updateStatus();
     });
@@ -293,7 +312,7 @@
   }
 
   function openCommentPopup(anno) {
-    popupLayer.innerHTML = '';
+    popupLayer.textContent = '';
     const popup = document.createElement('div');
     // anno.box is in page coordinates; the popup is fixed to the viewport, so convert.
     const vpX = anno.box.x - window.scrollX;
@@ -312,17 +331,16 @@
     input.style.cssText = `background:#1e293b;border:1px solid #475569;color:#f8fafc;padding:5px 8px;border-radius:4px;font-size:12px;width:220px;outline:none;`;
 
     const saveBtn = document.createElement('button');
-    saveBtn.className = 'agent-btn';
+    saveBtn.className = 'overlay-btn';
     saveBtn.textContent = 'Save';
     saveBtn.style.cssText = `background:#2563eb;color:#fff;padding:5px 10px;`;
 
-    const dismiss = () => { popupLayer.innerHTML = ''; };
+    const dismiss = () => { popupLayer.textContent = ''; };
 
     const save = () => {
       const val = input.value.trim();
       anno.comment = val || null;
-      window.__selected_elements__ = window.__agent_annotations__;
-      const existing = document.getElementById(`__anno_${anno.id}__`);
+      const existing = document.getElementById(`__overlay_box_${anno.id}__`);
       if (existing) existing.remove();
       renderAnnotationBox(anno);
       dismiss();
@@ -413,7 +431,7 @@
         width: Math.round(next.width),
         height: Math.round(next.height)
       };
-      const old = document.getElementById(`__anno_${a.anno.id}__`);
+      const old = document.getElementById(`__overlay_box_${a.anno.id}__`);
       if (old) old.remove();
       renderAnnotationBox(a.anno);
     }
@@ -431,7 +449,7 @@
     for (const m of muts) {
       const t = m.target.nodeType === Node.ELEMENT_NODE ? m.target : m.target.parentElement;
       // Ignore mutations caused by our own overlay DOM (prevents feedback loops).
-      if (t && (t.closest('#__agent_inspector_container__') || t.closest('#__agent_boxes_layer__'))) continue;
+      if (t && (t.closest('#__overlay_container__') || t.closest('#__overlay_boxes_layer__'))) continue;
       scheduleReanchor();
       return;
     }
@@ -444,7 +462,7 @@
   window.addEventListener('resize', scheduleReanchor);
 
   overlay.addEventListener('mousedown', (e) => {
-    if (e.target.closest('#__agent_toolbar__') || e.target.closest('#__agent_popup_layer__')) return;
+    if (e.target.closest('#__overlay_toolbar__') || e.target.closest('#__overlay_popup_layer__')) return;
     startX = e.clientX;
     startY = e.clientY;
     isDragging = true;
@@ -482,7 +500,7 @@
 
     // Discover elements inside box
     const rawCandidates = Array.from(document.querySelectorAll('body *')).filter(el => {
-      if (el.closest('#__agent_inspector_container__')) return false;
+      if (el.closest('#__overlay_container__')) return false;
       if (['path', 'g', 'defs', 'clippath', 'polygon', 'polyline', 'circle', 'rect', 'line'].includes(el.tagName.toLowerCase())) {
         if (el.closest('svg')) return false;
       }
@@ -528,7 +546,7 @@
     });
 
     // Element rects are stored in page (document) coordinates so they stay valid
-    // across scrolling (convert back to viewport coords via __agent_annotations_viewport__).
+    // across scrolling (convert back to viewport coords via __overlay_annotations_viewport__).
     const elements = finalElements.map(el => {
       const r = el.getBoundingClientRect();
       return {
@@ -553,7 +571,7 @@
 
     annotationCounter++;
     const anno = {
-      id: `anno_${Date.now()}_${annotationCounter}`,
+      id: `ovl_${Date.now()}_${annotationCounter}`,
       number: annotationCounter,
       createdAt: Date.now(),
       // Box is in page (document) coordinates — survives scrolling.
@@ -576,9 +594,7 @@
       elements
     };
 
-    window.__agent_annotations__.push(anno);
-    window.__selected_elements__ = window.__agent_annotations__;
-
+    window.__overlay_annotations__.push(anno);
     renderAnnotationBox(anno);
     // Anchor the box to the captured elements so it follows layout changes online.
     if (finalElements.length > 0) registerAnchor(anno, finalElements);
@@ -642,7 +658,7 @@
     if (wasClick) setFoldedState(!folded);
   });
 
-  // ---- Global hotkey: Alt+A summons/dismisses the annotator from anywhere ----
+  // ---- Global hotkey: Alt+A summons/dismisses the overlay annotator from anywhere ----
   // While hidden it brings back the floating launcher FOLDED (click it to open
   // the bar); while the UI is visible it dismisses everything. Nothing is destroyed.
   function onGlobalHotkey(e) {
@@ -654,26 +670,25 @@
   }
   window.addEventListener('keydown', onGlobalHotkey, true);
 
-  document.getElementById('__agent_pause_btn__').addEventListener('click', (e) => {
+  document.getElementById('__overlay_pause_btn__').addEventListener('click', (e) => {
     e.stopPropagation();
     paused = !paused;
     // Release the drag overlay so the underlying page (menus, dropdowns, links) is interactive.
     overlay.style.pointerEvents = (paused || folded) ? 'none' : 'auto';
     overlay.style.cursor = (paused || folded) ? 'default' : 'crosshair';
-    const btn = document.getElementById('__agent_pause_btn__');
-    btn.innerHTML = paused ? '&#x25B6; Resume' : '&#x23F8; Pause';
+    const btn = document.getElementById('__overlay_pause_btn__');
+    btn.textContent = paused ? '▶ Resume' : '⏸ Pause';
     btn.style.background = paused ? '#10b981' : '#f59e0b';
     btn.style.color = paused ? '#fff' : '#1e293b';
     if (paused) { ghostBox.style.display = 'none'; isDragging = false; }
     updateStatus();
   });
 
-  document.getElementById('__agent_clear_btn__').addEventListener('click', (e) => {
+  document.getElementById('__overlay_clear_btn__').addEventListener('click', (e) => {
     e.stopPropagation();
-    boxesLayer.innerHTML = '';
-    popupLayer.innerHTML = '';
-    window.__agent_annotations__ = [];
-    window.__selected_elements__ = [];
+    boxesLayer.textContent = '';
+    popupLayer.textContent = '';
+    window.__overlay_annotations__ = [];
     anchors.clear();
     annotationCounter = 0;
     updateStatus();
@@ -686,15 +701,15 @@
     resizeObserver.disconnect();
     mutationObserver.disconnect();
     window.removeEventListener('keydown', onGlobalHotkey, true);
-    document.getElementById('__agent_hint_toast__')?.remove();
+    document.getElementById('__overlay_hint_toast__')?.remove();
     root.remove();
     boxesLayer.remove(); // boxes layer lives outside root (document-anchored)
-    if (window.__agent_annotator_cleanup__ === teardown) delete window.__agent_annotator_cleanup__;
-    if (window.__playwright_companion__?.modules?.annotator) {
-      delete window.__playwright_companion__.modules.annotator;
+    if (window.__overlay_cleanup__ === teardown) delete window.__overlay_cleanup__;
+    if (window.__playwright_companion__?.modules?.overlay_annotator) {
+      delete window.__playwright_companion__.modules.overlay_annotator;
     }
   }
-  window.__agent_annotator_cleanup__ = teardown;
+  window.__overlay_cleanup__ = teardown;
 
   // Register with Playwright Companion namespace
   window.__playwright_companion__ = window.__playwright_companion__ || {
@@ -702,15 +717,15 @@
     modules: {}
   };
 
-  window.__playwright_companion__.modules.annotator = {
-    version: '1.4.0',
+  window.__playwright_companion__.modules.overlay_annotator = {
+    version: '2.0.0',
     ready: true,
     get paused() { return paused; },
     get folded() { return folded; },
     get hidden() { return hidden; },
     setPaused(state) {
       if (paused !== !!state) {
-        document.getElementById('__agent_pause_btn__')?.click();
+        document.getElementById('__overlay_pause_btn__')?.click();
       }
     },
     setFolded(state) {
@@ -731,30 +746,30 @@
       toggleLauncher();
     },
     clear() {
-      document.getElementById('__agent_clear_btn__')?.click();
+      document.getElementById('__overlay_clear_btn__')?.click();
     },
     getAnnotations() {
-      return window.__agent_annotations__;
+      return window.__overlay_annotations__;
     },
     getViewportAnnotations() {
-      return typeof window.__agent_annotations_viewport__ === 'function'
-        ? window.__agent_annotations_viewport__()
-        : window.__agent_annotations__;
+      return typeof window.__overlay_annotations_viewport__ === 'function'
+        ? window.__overlay_annotations_viewport__()
+        : window.__overlay_annotations__;
     },
     getActiveBoxCount() {
-      return window.__agent_annotations__ ? window.__agent_annotations__.length : 0;
+      return window.__overlay_annotations__ ? window.__overlay_annotations__.length : 0;
     },
     cleanup() {
       teardown();
     }
   };
 
-  document.getElementById('__agent_close_btn__').addEventListener('click', (e) => {
+  document.getElementById('__overlay_close_btn__').addEventListener('click', (e) => {
     e.stopPropagation();
     // Close is non-destructive: it hides the whole UI but keeps every annotation
     // and the Alt+A hotkey alive. Full teardown stays available via cleanup().
     setHiddenState(true);
-    showHint('Annotator closed \u2014 press Alt+A to reopen');
+    showHint('Overlay closed \u2014 press Alt+A to reopen');
   });
 
   // Mounted folded by default (non-intrusive floating launcher). Explicit agent
@@ -762,5 +777,12 @@
   // `window.__playwright_companion_autostart__ = 'expanded'` before loading.
   setFoldedState(window.__playwright_companion_autostart__ !== 'expanded');
 
-  return "Playwright Companion (Annotator v1.4) ready!";
+    return "Playwright Companion (Overlay Annotator v2.0) ready!";
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', mount, { once: true });
+  } else {
+    mount();
+  }
 })();

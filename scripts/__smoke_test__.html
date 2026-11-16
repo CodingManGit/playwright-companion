@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Annotator Smoke Test</title>
+<title>Overlay Annotator Smoke Test</title>
 <style>
   body { font-family: system-ui, sans-serif; margin: 0; padding: 24px; background: #f1f5f9; }
   h1 { margin-top: 0; }
@@ -13,9 +13,9 @@
 </style>
 </head>
 <body>
-  <h1>Annotator Smoke Test Page</h1>
+  <h1>Overlay Annotator Smoke Test Page</h1>
   <div class="card">
-    <p>Interactive area — clicking must work while the annotator is folded or hidden.</p>
+    <p>Interactive area — clicking must work while the overlay annotator is folded or hidden.</p>
     <button id="counter-btn">Clicks: <span id="count">0</span></button>
   </div>
   <div class="card" id="swatch-card">
@@ -42,6 +42,6 @@
       el.textContent = String(Number(el.textContent) + 1);
     });
   </script>
-  <script src="annotator.js?v=2"></script>
+  <script src="overlay_annotator.js?v=3"></script>
 </body>
 </html>
