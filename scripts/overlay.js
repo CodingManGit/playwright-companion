@@ -1,11 +1,20 @@
 /**
  * Browser Interactive Multi-Box Overlay & DOM Element Inspector
  * 
- * Injected into active web pages via Playwright (`browser_evaluate`).
+ * Injected into active web pages via Playwright (`browser_evaluate` or `--init-script`).
  * Provides an interactive UI for users to drag selection boxes over web elements,
  * attach instructions/comments to each box, and cleanly extract DOM metadata for the agent.
  */
 (() => {
+  // 0. Tear down any previous instance (DOM + listeners + observers) if present
+  if (typeof window.__overlay_cleanup__ === 'function') {
+    try { window.__overlay_cleanup__(); } catch (_) {}
+  }
+
+  let initialized = false;
+  let domLoadedHandler = null;
+  let bodyObserver = null;
+
   // Trusted Types Policy for strict CSP environments (e.g. Google Flow, Google.com)
   let ttPolicy = null;
   if (typeof window !== 'undefined' && window.trustedTypes && typeof window.trustedTypes.createPolicy === 'function') {
@@ -26,23 +35,69 @@
       el.innerHTML = html;
     }
   };
+  let teardown = () => {
+    if (domLoadedHandler) {
+      document.removeEventListener('DOMContentLoaded', domLoadedHandler);
+      window.removeEventListener('load', domLoadedHandler);
+      domLoadedHandler = null;
+    }
+    if (bodyObserver) {
+      bodyObserver.disconnect();
+      bodyObserver = null;
+    }
+    if (window.__overlay_cleanup__ === teardown) delete window.__overlay_cleanup__;
+    if (window.__playwright_companion__?.modules?.overlay) {
+      delete window.__playwright_companion__.modules.overlay;
+    }
+  };
+  window.__overlay_cleanup__ = teardown;
 
-  function mount() {  // 0. Tear down any previous instance (DOM + listeners + observers) if present
-  if (typeof window.__overlay_cleanup__ === 'function') {
-    try { window.__overlay_cleanup__(); } catch (_) {}
+  // Pre-register namespace for immediate discovery across all lifecycle stages
+  window.__playwright_companion__ = window.__playwright_companion__ || {
+    version: '1.0.0',
+    modules: {}
+  };
+
+  // Provide early impression placeholder if queried before DOMContentLoaded
+  if (!window.__playwright_companion__.modules.overlay) {
+    window.__playwright_companion__.modules.overlay = {
+      version: '2.0.0',
+      get ready() {
+        if (!initialized && document.body) {
+          init();
+        }
+        return initialized;
+      }
+    };
   }
 
-  // 2. Root Container — STATIC on purpose: it must NOT create a stacking context,
-  // so child layers' z-indexes participate at document level and can interleave
-  // with the document-anchored boxes layer (overlay < boxes < ghost < popup < toolbar).
-  const root = document.createElement('div');
-  root.id = '__overlay_container__';
-  root.style.cssText = 'pointer-events:none;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;user-select:none;';
+  function init() {
+    if (initialized) return;
+    if (document.getElementById('__overlay_container__')) return;
+    if (!document.body) return;
 
-  // Inject CSS Styles
-  const styleEl = document.createElement('style');
+    initialized = true;
+    if (domLoadedHandler) {
+      document.removeEventListener('DOMContentLoaded', domLoadedHandler);
+      window.removeEventListener('load', domLoadedHandler);
+      domLoadedHandler = null;
+    }
+    if (bodyObserver) {
+      bodyObserver.disconnect();
+      bodyObserver = null;
+    }
+
+    // 2. Root Container — STATIC on purpose: it must NOT create a stacking context,
+    // so child layers' z-indexes participate at document level and can interleave
+    // with the document-anchored boxes layer (overlay < boxes < ghost < popup < toolbar).
+    const root = document.createElement('div');
+    root.id = '__overlay_container__';
+    root.style.cssText = 'pointer-events:none;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;user-select:none;';
+
+    // Inject CSS Styles
+    const styleEl = document.createElement('style');
   styleEl.textContent = `
-    @keyframes overlayPulse { 0%,100% { transform: scale(1); opacity:1; } 50% { transform: scale(1.2); opacity:0.8; } }
+    @keyframes agentPulse { 0%,100% { transform: scale(1); opacity:1; } 50% { transform: scale(1.2); opacity:0.8; } }
     .overlay-btn { cursor:pointer; font-size:12px; font-weight:500; border-radius:6px; border:none; transition:all 0.15s ease; font-family:inherit; }
     .overlay-btn:hover { filter: brightness(1.15); transform: translateY(-1px); }
     .overlay-btn:active { transform: translateY(0); }
@@ -54,6 +109,7 @@
   // annotations survive scrolling. Use `window.__overlay_annotations_viewport__()` to
   // get viewport-relative coordinates (e.g. for cropping a viewport screenshot).
   window.__overlay_annotations__ = [];
+  window.__selected_elements__ = window.__overlay_annotations__;
   window.__overlay_annotations_viewport__ = () => {
     const sx = window.scrollX, sy = window.scrollY;
     return window.__overlay_annotations__.map(a => ({
@@ -75,68 +131,104 @@
   let folded = true;  // Folded mode: only the floating launcher is visible; bar & drag overlay are hidden
   let hidden = false; // Hidden mode: the whole UI (incl. launcher) is dismissed — annotations are kept
 
-  // 4. Floating Control Toolbar (topmost layer — hidden while folded, draggable by its background)
+  // 4. Unified Floating Control Bar (morphs between a compact circular launcher when folded, and full toolbar when expanded)
   const toolbar = document.createElement('div');
   toolbar.id = '__overlay_toolbar__';
-  toolbar.style.cssText = 'position:fixed;right:20px;bottom:84px;display:none;background:#0f172a;color:#f8fafc;padding:8px 18px;border-radius:9999px;box-shadow:0 10px 25px -5px rgba(0,0,0,0.5),0 0 0 1px rgba(255,255,255,0.1);align-items:center;gap:12px;pointer-events:auto;font-size:13px;z-index:2147483649;backdrop-filter:blur(8px);cursor:move;user-select:none;';
-  setHTML(toolbar, `
-    <div style="display:flex;align-items:center;gap:8px;">
-      <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#10b981;box-shadow:0 0 8px #10b981;animation:overlayPulse 2s infinite;"></span>
-      <span style="font-weight:600;letter-spacing:-0.2px;">Multi-Box Overlay</span>
-    </div>
-    <span style="color:#64748b;height:12px;border-left:1px solid #334155;"></span>
-    <span id="__overlay_status__" style="color:#94a3b8;font-size:12px;">Drag to draw Box #1</span>
-    <button id="__overlay_pause_btn__" class="overlay-btn" style="background:#f59e0b;color:#1e293b;padding:4px 10px;font-weight:600;">&#x23F8; Pause</button>
-    <button id="__overlay_clear_btn__" class="overlay-btn" style="background:#334155;color:#e2e8f0;padding:4px 10px;">Clear All</button>
-    <button id="__overlay_close_btn__" class="overlay-btn" title="Close the overlay — press Alt+A to bring it back" style="background:#dc2626;color:#fff;padding:4px 10px;">&#x2715; Close</button>
-  `);
-  root.appendChild(toolbar);
+  toolbar.style.cssText = 'position:fixed;right:20px;bottom:20px;background:linear-gradient(135deg,#0f172a,#1e293b);color:#f8fafc;box-shadow:0 10px 25px -5px rgba(0,0,0,0.5),0 0 0 1px rgba(255,255,255,0.12);pointer-events:auto;z-index:2147483649;backdrop-filter:blur(8px);transition:width 0.22s cubic-bezier(0.16,1,0.3,1),height 0.22s cubic-bezier(0.16,1,0.3,1),border-radius 0.22s cubic-bezier(0.16,1,0.3,1),padding 0.22s cubic-bezier(0.16,1,0.3,1);box-sizing:border-box;user-select:none;display:flex;align-items:center;justify-content:center;';
 
-  // 4b. Floating Action Button — always present, folded by default. Click to
-  // unfold/fold the annotation bar; drag (beyond a small threshold) to reposition.
-  const fab = document.createElement('div');
-  fab.id = '__overlay_fab__';
-  fab.style.cssText = 'position:fixed;right:20px;bottom:20px;width:52px;height:52px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);color:#f8fafc;display:flex;align-items:center;justify-content:center;cursor:pointer;pointer-events:auto;z-index:2147483649;box-shadow:0 10px 25px -5px rgba(0,0,0,0.5),0 0 0 1px rgba(255,255,255,0.12);user-select:none;font-size:22px;';
-  fab.title = 'Open overlay (Alt+A \u00b7 drag to move)';
-  setHTML(fab, `
+  // Folded view: circular launcher button with pencil icon and badge
+  const foldedView = document.createElement('div');
+  foldedView.id = '__overlay_folded_view__';
+  foldedView.style.cssText = 'display:flex;align-items:center;justify-content:center;width:100%;height:100%;font-size:22px;user-select:none;cursor:pointer;';
+  foldedView.title = 'Open overlay (Alt+A \u00b7 drag to move)';
+  setHTML(foldedView, `
     <span id="__overlay_fab_icon__">&#x270E;</span>
     <span id="__overlay_fab_badge__" style="position:absolute;top:-4px;right:-4px;min-width:18px;height:18px;padding:0 4px;border-radius:9999px;background:#2563eb;color:#fff;font-size:11px;font-weight:700;display:none;align-items:center;justify-content:center;box-sizing:border-box;"></span>
   `);
-  root.appendChild(fab);
+  toolbar.appendChild(foldedView);
 
-  function updateFab() {
-    const icon = document.getElementById('__overlay_fab_icon__');
+  // Expanded view: full multi-box annotation control toolbar
+  const expandedView = document.createElement('div');
+  expandedView.id = '__overlay_expanded_view__';
+  expandedView.style.cssText = 'display:none;align-items:center;gap:12px;white-space:nowrap;font-size:13px;';
+  setHTML(expandedView, `
+    <div style="display:flex;align-items:center;gap:8px;">
+      <button id="__overlay_fold_btn__" class="overlay-btn" title="Fold into button (Alt+A)" style="background:#10b981;box-shadow:0 0 8px rgba(16,185,129,0.7);color:#0f172a;width:18px;height:18px;padding:0;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:11px;font-weight:900;border:none;transition:all 0.15s ease;line-height:1;">&#x25BE;</button>
+      <span style="font-weight:600;letter-spacing:-0.2px;cursor:move;">Multi-Box Overlay</span>
+    </div>
+    <span style="color:#64748b;height:12px;border-left:1px solid #334155;"></span>
+    <span id="__overlay_status__" style="color:#94a3b8;font-size:12px;cursor:move;">Drag to draw Box #1</span>
+    <button id="__overlay_pause_btn__" class="overlay-btn" title="Pause annotating (interact with page)" style="background:#f59e0b;color:#1e293b;width:24px;height:24px;padding:0;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:11px;line-height:1;font-weight:700;">&#x23F8;&#xFE0E;</button>
+    <button id="__overlay_clear_btn__" class="overlay-btn" title="Clear all annotations" style="background:#334155;color:#e2e8f0;width:24px;height:24px;padding:0;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg></button>
+    <button id="__overlay_close_btn__" class="overlay-btn" title="Dismiss annotator — press Alt+A to reopen" style="background:#dc2626;color:#fff;width:24px;height:24px;padding:0;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:12px;line-height:1;">&#x2715;</button>
+  `);
+  toolbar.appendChild(expandedView);
+  root.appendChild(toolbar);
+
+  function updateBadge() {
     const badge = document.getElementById('__overlay_fab_badge__');
     const count = window.__overlay_annotations__.length;
-    if (icon) icon.textContent = folded ? '✎' : '▾'; // pencil → fold chevron
     if (badge) {
       badge.style.display = (folded && count > 0) ? 'flex' : 'none';
       badge.textContent = count > 99 ? '99+' : String(count);
     }
-    fab.title = folded ? 'Open overlay (Alt+A \u00b7 drag to move)' : 'Fold overlay bar (Alt+A \u00b7 drag to move)';
+    toolbar.title = folded ? 'Open overlay (Alt+A \u00b7 drag to move)' : 'Overlay toolbar (drag to move)';
   }
 
-  // Fold/unfold the annotation bar. While folded the page is fully interactive
-  // (drag overlay released) but existing annotation boxes remain visible.
+  // Fold/unfold the unified bar.
   function setFoldedState(next) {
     folded = !!next;
-    toolbar.style.display = folded ? 'none' : 'flex';
     overlay.style.pointerEvents = (folded || paused) ? 'none' : 'auto';
     overlay.style.cursor = (folded || paused) ? 'default' : 'crosshair';
-    if (folded) { ghostBox.style.display = 'none'; isDragging = false; popupLayer.textContent = ''; }
-    updateFab();
-    updateStatus();
+
+    if (folded) {
+      toolbar.style.width = '48px';
+      toolbar.style.height = '48px';
+      toolbar.style.padding = '0';
+      toolbar.style.borderRadius = '9999px';
+      toolbar.style.cursor = 'pointer';
+      foldedView.style.display = 'flex';
+      expandedView.style.display = 'none';
+
+      ghostBox.style.display = 'none';
+      isDragging = false;
+      setHTML(popupLayer, '');
+      updateBadge();
+    } else {
+      toolbar.style.width = 'auto';
+      toolbar.style.height = 'auto';
+      toolbar.style.minHeight = '42px';
+      toolbar.style.padding = '7px 16px';
+      toolbar.style.borderRadius = '9999px';
+      toolbar.style.cursor = 'move';
+      foldedView.style.display = 'none';
+      expandedView.style.display = 'flex';
+
+      // Keep toolbar safely within viewport bounds if dragged
+      if (toolbar.style.left && toolbar.style.left !== 'auto') {
+        requestAnimationFrame(() => {
+          const w = toolbar.offsetWidth || 560;
+          const h = toolbar.offsetHeight || 44;
+          const maxLeft = Math.max(8, window.innerWidth - w - 8);
+          const maxTop = Math.max(8, window.innerHeight - h - 8);
+          const curLeft = parseFloat(toolbar.style.left);
+          const curTop = parseFloat(toolbar.style.top);
+          if (curLeft > maxLeft) toolbar.style.left = maxLeft + 'px';
+          if (curTop > maxTop) toolbar.style.top = maxTop + 'px';
+        });
+      }
+      updateStatus();
+    }
   }
 
-  // Hidden mode: dismiss the ENTIRE UI (launcher, bar, overlay, boxes) without
-  // tearing anything down. The Alt+A hotkey (or the agent API) summons it back
-  // with the same fold state and all annotations intact.
+  // Hidden mode: dismiss the ENTIRE UI (bar, overlay, boxes) without
+  // tearing anything down. The Alt+A hotkey summons it back.
   function setHiddenState(next) {
     hidden = !!next;
     root.style.display = hidden ? 'none' : '';
     boxesLayer.style.display = hidden ? 'none' : '';
-    if (hidden) { popupLayer.textContent = ''; ghostBox.style.display = 'none'; isDragging = false; }
-    updateFab();
+    if (hidden) { setHTML(popupLayer, ''); ghostBox.style.display = 'none'; isDragging = false; }
+    updateBadge();
     updateStatus();
   }
 
@@ -146,14 +238,13 @@
     setFoldedState(false);
   }
 
-  // Hotkey semantics: hidden -> bring back the FOLDED launcher (click it to open
-  // the bar); visible (folded or expanded) -> dismiss the whole UI.
+  // Hotkey semantics: toggle between folded and expanded, or unhide if hidden.
   function toggleLauncher() {
     if (hidden) {
       setHiddenState(false);
-      setFoldedState(true);
+      setFoldedState(false);
     } else {
-      setHiddenState(true);
+      setFoldedState(!folded);
     }
   }
 
@@ -237,7 +328,7 @@
   }
 
   function updateStatus() {
-    updateFab();
+    updateBadge();
     const statusEl = document.getElementById('__overlay_status__');
     if (!statusEl) return;
     if (paused) {
@@ -246,7 +337,7 @@
     }
     const count = window.__overlay_annotations__.length;
     if (count === 0) {
-      statusEl.textContent = `Drag to draw Box #1`;
+      setHTML(statusEl, `Drag to draw Box #1`);
     } else {
       setHTML(statusEl, `<span style="color:#10b981;font-weight:600;">${count} box${count > 1 ? 'es' : ''} active</span> <span style="color:#64748b;">(drag to add #${count + 1})</span>`);
     }
@@ -254,7 +345,7 @@
 
   function renderAnnotationBox(anno) {
     const boxWrapper = document.createElement('div');
-    boxWrapper.id = `__overlay_box_${anno.id}__`;
+    boxWrapper.id = `__anno_${anno.id}__`;
     // anno.box is in page (document) coordinates; offset by the layer origin so the
     // absolute box stays glued to the page content across scrolling.
     boxWrapper.style.cssText = `position:absolute;left:${anno.box.x - layerOriginX}px;top:${anno.box.y - layerOriginY}px;width:${anno.box.width}px;height:${anno.box.height}px;border:2px solid #3b82f6;background:rgba(59,130,246,0.08);border-radius:4px;box-sizing:border-box;pointer-events:none;`;
@@ -295,13 +386,14 @@
     // Delete Button
     const delBtn = document.createElement('button');
     delBtn.style.cssText = `background:#475569;color:#fff;border:none;border-radius:4px;width:18px;height:18px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:11px;line-height:1;padding:0;`;
-    delBtn.textContent = '×';
+    setHTML(delBtn, '×');
     delBtn.title = 'Remove this annotation';
     delBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       window.__overlay_annotations__ = window.__overlay_annotations__.filter(a => a.id !== anno.id);
+      window.__selected_elements__ = window.__overlay_annotations__;
       anchors.delete(anno.id);
-      popupLayer.textContent = ''; // close any open comment popup for the deleted box
+      setHTML(popupLayer, ''); // close any open comment popup for the deleted box
       boxWrapper.remove();
       updateStatus();
     });
@@ -312,7 +404,7 @@
   }
 
   function openCommentPopup(anno) {
-    popupLayer.textContent = '';
+    setHTML(popupLayer, '');
     const popup = document.createElement('div');
     // anno.box is in page coordinates; the popup is fixed to the viewport, so convert.
     const vpX = anno.box.x - window.scrollX;
@@ -335,12 +427,13 @@
     saveBtn.textContent = 'Save';
     saveBtn.style.cssText = `background:#2563eb;color:#fff;padding:5px 10px;`;
 
-    const dismiss = () => { popupLayer.textContent = ''; };
+    const dismiss = () => { setHTML(popupLayer, ''); };
 
     const save = () => {
       const val = input.value.trim();
       anno.comment = val || null;
-      const existing = document.getElementById(`__overlay_box_${anno.id}__`);
+      window.__selected_elements__ = window.__overlay_annotations__;
+      const existing = document.getElementById(`__anno_${anno.id}__`);
       if (existing) existing.remove();
       renderAnnotationBox(anno);
       dismiss();
@@ -431,7 +524,7 @@
         width: Math.round(next.width),
         height: Math.round(next.height)
       };
-      const old = document.getElementById(`__overlay_box_${a.anno.id}__`);
+      const old = document.getElementById(`__anno_${a.anno.id}__`);
       if (old) old.remove();
       renderAnnotationBox(a.anno);
     }
@@ -454,10 +547,13 @@
       return;
     }
   });
-  mutationObserver.observe(document.body, {
-    subtree: true, childList: true, attributes: true,
-    attributeFilter: ['class', 'style', 'hidden']
-  });
+  const targetToObserve = document.body || document.documentElement;
+  if (targetToObserve) {
+    mutationObserver.observe(targetToObserve, {
+      subtree: true, childList: true, attributes: true,
+      attributeFilter: ['class', 'style', 'hidden']
+    });
+  }
   window.addEventListener('scroll', scheduleReanchor, { capture: true, passive: true });
   window.addEventListener('resize', scheduleReanchor);
 
@@ -546,7 +642,7 @@
     });
 
     // Element rects are stored in page (document) coordinates so they stay valid
-    // across scrolling (convert back to viewport coords via __agent_annotations_viewport__).
+    // across scrolling (convert back to viewport coords via __overlay_annotations_viewport__).
     const elements = finalElements.map(el => {
       const r = el.getBoundingClientRect();
       return {
@@ -595,6 +691,8 @@
     };
 
     window.__overlay_annotations__.push(anno);
+    window.__selected_elements__ = window.__overlay_annotations__;
+
     renderAnnotationBox(anno);
     // Anchor the box to the captured elements so it follows layout changes online.
     if (finalElements.length > 0) registerAnchor(anno, finalElements);
@@ -605,8 +703,8 @@
   });
 
   // Toolbar button handlers
-  // ---- Draggable toolbar (drag by background; buttons/inputs stay clickable) ----
-  let barDrag = null;
+  // ---- Draggable unified control widget (drag to reposition; clicks on folded circle expand immediately) ----
+  let barDrag = null, barMoved = false;
   toolbar.addEventListener('mousedown', (e) => {
     if (e.target.closest('button, input')) return; // buttons remain clickable
     e.preventDefault();
@@ -617,50 +715,32 @@
     toolbar.style.bottom = 'auto';
     toolbar.style.left = r.left + 'px';
     toolbar.style.top = r.top + 'px';
-    barDrag = { dx: e.clientX - r.left, dy: e.clientY - r.top };
+    barDrag = { dx: e.clientX - r.left, dy: e.clientY - r.top, startX: e.clientX, startY: e.clientY };
+    barMoved = false;
   });
   window.addEventListener('mousemove', (e) => {
     if (!barDrag) return;
+    if (Math.abs(e.clientX - barDrag.startX) > 4 || Math.abs(e.clientY - barDrag.startY) > 4) {
+      barMoved = true;
+    }
     const w = toolbar.offsetWidth, h = toolbar.offsetHeight;
-    const x = Math.max(4, Math.min(window.innerWidth - w - 4, e.clientX - barDrag.dx));
-    const y = Math.max(4, Math.min(window.innerHeight - h - 4, e.clientY - barDrag.dy));
+    const x = Math.max(8, Math.min(window.innerWidth - w - 8, e.clientX - barDrag.dx));
+    const y = Math.max(8, Math.min(window.innerHeight - h - 8, e.clientY - barDrag.dy));
     toolbar.style.left = x + 'px';
     toolbar.style.top = y + 'px';
   });
-  window.addEventListener('mouseup', () => { barDrag = null; });
-
-  // ---- Floating launcher: click to fold/unfold; drag (beyond threshold) to reposition ----
-  let fabDrag = null, fabMoved = false;
-  fab.addEventListener('mousedown', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const r = fab.getBoundingClientRect();
-    // Switch from right/bottom anchoring to absolute positioning at the grabbed point.
-    fab.style.right = 'auto';
-    fab.style.bottom = 'auto';
-    fab.style.left = r.left + 'px';
-    fab.style.top = r.top + 'px';
-    fabDrag = { dx: e.clientX - r.left, dy: e.clientY - r.top, startX: e.clientX, startY: e.clientY };
-    fabMoved = false;
-  });
-  window.addEventListener('mousemove', (e) => {
-    if (!fabDrag) return;
-    if (Math.abs(e.clientX - fabDrag.startX) > 5 || Math.abs(e.clientY - fabDrag.startY) > 5) fabMoved = true;
-    const x = Math.max(4, Math.min(window.innerWidth - fab.offsetWidth - 4, e.clientX - fabDrag.dx));
-    const y = Math.max(4, Math.min(window.innerHeight - fab.offsetHeight - 4, e.clientY - fabDrag.dy));
-    fab.style.left = x + 'px';
-    fab.style.top = y + 'px';
-  });
   window.addEventListener('mouseup', () => {
-    if (!fabDrag) return;
-    const wasClick = !fabMoved;
-    fabDrag = null;
-    if (wasClick) setFoldedState(!folded);
+    if (!barDrag) return;
+    const wasClick = !barMoved;
+    barDrag = null;
+    if (wasClick && folded) {
+      setFoldedState(false);
+    }
   });
 
-  // ---- Global hotkey: Alt+A summons/dismisses the annotator from anywhere ----
-  // While hidden it brings back the floating launcher FOLDED (click it to open
-  // the bar); while the UI is visible it dismisses everything. Nothing is destroyed.
+  // ---- Global hotkey: Alt+A toggles the launcher/toolbar from anywhere ----
+  // Folded <-> expanded while visible; if hidden it re-summons the UI expanded.
+  // Nothing is destroyed either way.
   function onGlobalHotkey(e) {
     if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && e.code === 'KeyA') {
       e.preventDefault();
@@ -677,7 +757,8 @@
     overlay.style.pointerEvents = (paused || folded) ? 'none' : 'auto';
     overlay.style.cursor = (paused || folded) ? 'default' : 'crosshair';
     const btn = document.getElementById('__overlay_pause_btn__');
-    btn.textContent = paused ? '▶ Resume' : '⏸ Pause';
+    setHTML(btn, paused ? '&#x25B6;&#xFE0E;' : '&#x23F8;&#xFE0E;');
+    btn.title = paused ? 'Resume annotating' : 'Pause annotating (interact with page)';
     btn.style.background = paused ? '#10b981' : '#f59e0b';
     btn.style.color = paused ? '#fff' : '#1e293b';
     if (paused) { ghostBox.style.display = 'none'; isDragging = false; }
@@ -686,9 +767,10 @@
 
   document.getElementById('__overlay_clear_btn__').addEventListener('click', (e) => {
     e.stopPropagation();
-    boxesLayer.textContent = '';
-    popupLayer.textContent = '';
+    setHTML(boxesLayer, '');
+    setHTML(popupLayer, '');
     window.__overlay_annotations__ = [];
+    window.__selected_elements__ = [];
     anchors.clear();
     annotationCounter = 0;
     updateStatus();
@@ -696,7 +778,7 @@
 
   // Unified teardown — also exposed globally so re-injection can fully replace
   // a previous instance (DOM + observers + window listeners).
-  function teardown() {
+  teardown = () => {
     anchors.clear();
     resizeObserver.disconnect();
     mutationObserver.disconnect();
@@ -708,7 +790,7 @@
     if (window.__playwright_companion__?.modules?.overlay) {
       delete window.__playwright_companion__.modules.overlay;
     }
-  }
+  };
   window.__overlay_cleanup__ = teardown;
 
   // Register with Playwright Companion namespace
@@ -764,6 +846,11 @@
     }
   };
 
+  document.getElementById('__overlay_fold_btn__').addEventListener('click', (e) => {
+    e.stopPropagation();
+    setFoldedState(true);
+  });
+
   document.getElementById('__overlay_close_btn__').addEventListener('click', (e) => {
     e.stopPropagation();
     // Close is non-destructive: it hides the whole UI but keeps every annotation
@@ -776,13 +863,33 @@
   // injection can open the bar right away by setting
   // `window.__playwright_companion_autostart__ = 'expanded'` before loading.
   setFoldedState(window.__playwright_companion_autostart__ !== 'expanded');
+  } // end init()
 
-    return "Playwright Companion (Overlay v2.0) ready!";
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', mount, { once: true });
+  if (!document.body) {
+    domLoadedHandler = () => {
+      if (document.body) init();
+    };
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', domLoadedHandler, { once: true });
+      window.addEventListener('load', domLoadedHandler, { once: true });
+    }
+    if (document.documentElement) {
+      bodyObserver = new MutationObserver(() => {
+        if (document.body) {
+          if (bodyObserver) {
+            bodyObserver.disconnect();
+            bodyObserver = null;
+          }
+          init();
+        }
+      });
+      bodyObserver.observe(document.documentElement, { childList: true });
+    }
   } else {
-    mount();
+    init();
   }
+
+  return initialized
+    ? "Playwright Companion (Overlay v2.0) ready!"
+    : "Playwright Companion (Overlay v2.0) initialized (waiting for DOM)";
 })();

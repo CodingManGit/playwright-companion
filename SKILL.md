@@ -35,7 +35,7 @@ Playwright MCP ships a built-in `browser_annotate` tool. It is a **different pro
 **Routing rules:**
 1. In `--extension`, remote, container, WSL-without-display, or headless setups: **never call `browser_annotate`** — use the overlay annotator workflow below.
 2. Local headed desktop: either is acceptable. Prefer the overlay annotator when element identity (selectors, metadata) matters; native is fine for quick screenshot markup.
-3. **Coexistence**: the two share no globals and no DOM, so they can run side by side. But a native dashboard screenshot taken while the overlay is visible bakes the overlay's boxes/FAB into the image — call `hide()` before the native capture and `show()` afterwards.
+3. **Coexistence**: the two share no globals and no DOM, so they can run side by side. But a native dashboard screenshot taken while the overlay is visible bakes the overlay's boxes/launcher into the image — call `hide()` before the native capture and `show()` afterwards.
 
 ---
 
@@ -43,8 +43,8 @@ Playwright MCP ships a built-in `browser_annotate` tool. It is a **different pro
 
 - **Detectable Impression Protocol (`window.__playwright_companion__`)**:
   Agents query a standard global namespace to instantly acquire an impression of active companion tools. If loaded via `--init-script`, the agent operates with zero injection latency and zero prompt tokens.
-- **Always-Present Floating Launcher (Folded by Default)**: The overlay annotator mounts as a small draggable ✎ button (bottom-right corner) and stays folded so the page remains fully interactive. Humans click it to unfold the annotation bar and start annotating themselves — no agent invocation required. Agents can fold/unfold programmatically via `setFolded(state)` / `toggleFolded()`.
-- **`Alt+A` Summon Hotkey (Non-Destructive Close)**: The toolbar's `✕ Close` button only **hides** the entire UI — all annotations are preserved. Press `Alt+A` anywhere (even on a blank area of the page) to bring back the floating ✎ launcher **folded** (click it to open the bar); while the UI is visible, `Alt+A` dismisses it again. A hint toast appears after closing so the hotkey stays discoverable. Only the agent API `cleanup()` performs a full teardown.
+- **Always-Present Unified Morphing Launcher (Folded by Default)**: The overlay annotator mounts as a compact draggable ✎ circular launcher button (bottom-right corner) and stays folded so the page remains fully interactive. Clicking it expands the button directly into the full annotation toolbar right in place; the toolbar's left `▾` fold button collapses it back into the button with zero visual clutter. Agents can fold/unfold programmatically via `setFolded(state)` / `toggleFolded()`.
+- **`Alt+A` Summon Hotkey (Non-Destructive Close)**: `Alt+A` anywhere toggles between the folded launcher and the expanded toolbar, or re-summons the UI if dismissed. The rightmost `✕` button only **hides** the entire UI — all annotations are preserved — and a hint toast after closing points back at `Alt+A`. Only the agent API `cleanup()` performs a full teardown.
 - **Multi-Box Drag Selection**: Drag multiple persistent boxes across any page (numbered `#1`, `#2`, etc.).
 - **Pause / Resume (Page Interaction Mode)**: The toolbar's `⏸ Pause` button releases the drag overlay so the underlying page is fully clickable — open menus, dropdowns, expand accordions — then `▶ Resume` to keep annotating. Essential for annotating content that only exists after interaction.
 - **Element-Anchored Boxes (Online Layout Tracking)**: Each box anchors to the DOM elements captured at draw time. Its geometry is a normalized fit of the original box relative to the union bounding rect of the selected elements; a `ResizeObserver` + `MutationObserver` + scroll/resize listeners re-fit the box live when layout changes.
@@ -214,7 +214,7 @@ To remove the UI overlay when finished:
 }
 ```
 
-> **Note**: `cleanup()` is a **full teardown** (agent-initiated). The in-page `✕ Close` button and the `Alt+A` hotkey only hide/show the UI and never destroy annotations — use `hide()` instead of `cleanup()` if the user may still want to come back to their annotations.
+> **Note**: `cleanup()` is a **full teardown** (agent-initiated). The in-page `✕` button only hides the UI and `Alt+A` toggles/re-summons it — neither ever destroys annotations. Use `hide()` instead of `cleanup()` if the user may still want to come back to their annotations.
 
 ---
 
